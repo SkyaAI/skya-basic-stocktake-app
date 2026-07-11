@@ -144,9 +144,9 @@ function parseCatalogueImport(text: string): CatalogueImportRow[] {
 
   return dataRows
     .map((row) => ({
-      category: row[0]?.trim() ?? "",
-      code: normaliseProductCode(row[1] ?? ""),
-      name: row[2]?.trim() ?? "",
+      code: normaliseProductCode(row[0] ?? ""),
+      name: row[1]?.trim() ?? "",
+      category: row[2]?.trim() ?? "",
     }))
     .filter((row) => row.category && row.code && row.name)
     .filter(
@@ -474,14 +474,14 @@ export default function Home() {
         <body>
           <table>
             <tr>
-              <th>Category</th>
               <th>Product Code</th>
               <th>Product Name</th>
+              <th>Category</th>
             </tr>
             <tr>
-              <td>Sample Category</td>
               <td>CODE-0001</td>
               <td>Sample Product Name</td>
+              <td>Sample Category</td>
             </tr>
           </table>
         </body>
@@ -512,7 +512,7 @@ export default function Home() {
       if (rows.length === 0) {
         setToast({
           tone: "error",
-          text: "No catalogue rows found. Keep headings: Category, Product Code, Product Name.",
+          text: "No catalogue rows found. Keep headings: Product Code, Product Name, Category.",
         });
         return;
       }
@@ -582,6 +582,11 @@ export default function Home() {
 
   async function wipeAllData() {
     if (!supabase) return;
+    const warned = window.confirm(
+      "Warning: this will permanently delete all stocktake sessions, entries, products, and categories. Continue?",
+    );
+    if (!warned) return;
+
     const confirmation = window.prompt(
       'This deletes all sessions, entries, products, and categories. Type "WIPE" to continue.',
     );
@@ -1279,7 +1284,7 @@ function Catalogue({
           <div>
             <h2 className="text-xl font-black text-stone-950">Product Catalogue</h2>
             <p className="mt-1 text-sm text-stone-600">
-              Import columns: Category, Product Code, Product Name.
+              Import columns: Product Code, Product Name, Category.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
