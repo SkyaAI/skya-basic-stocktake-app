@@ -38,6 +38,7 @@ type CatalogueImportRow = {
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const appUrl = process.env.NEXT_PUBLIC_APP_URL;
 const supabaseConfigured =
   Boolean(supabaseUrl && supabaseAnonKey) &&
   !supabaseUrl?.includes("YOUR-PROJECT");
@@ -88,6 +89,22 @@ function downloadTextFile(filename: string, content: string, type: string) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function getAuthRedirectUrl() {
+  const configuredUrl = appUrl?.replace(/\/$/, "");
+  const browserOrigin =
+    typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
+  const origin =
+    configuredUrl && !configuredUrl.includes("localhost")
+      ? configuredUrl
+      : browserOrigin;
+
+  return `${origin}/auth/callback`;
+}
+
+function normaliseUsername(value: string) {
+  return value.trim().toLowerCase();
 }
 
 function parseCsvRows(text: string) {
@@ -167,6 +184,7 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authMode, setAuthMode] = useState<"sign-in" | "sign-up">("sign-in");
   const [authEmail, setAuthEmail] = useState("");
+  const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
@@ -230,22 +248,58 @@ export default function Home() {
   async function handleAuth(event: FormEvent) {
     event.preventDefault();
     if (!supabase) return;
+    const identifier = authEmail.trim();
+    let emailForPassword = identifier;
+
     setSaving(true);
+    if (authMode === "sign-in" && !identifier.includes("@")) {
+      const username = normaliseUsername(identifier);
+      const { data, error } = await supabase
+        .from("user_profiles")
+        .select("email")
+        .eq("username", username)
+        .maybeSingle();
+
+      if (error || !data?.email) {
+        setSaving(false);
+        setToast({ tone: "error", text: "No account found for that username." });
+        return;
+      }
+      emailForPassword = data.email;
+    }
+
+    if (authMode === "sign-up") {
+      const username = normaliseUsername(authUsername);
+      if (!/^[a-z0-9_]{3,30}$/.test(username)) {
+        setSaving(false);
+        setToast({
+          tone: "error",
+          text: "Username must be 3-30 characters: letters, numbers, and underscores only.",
+        });
+        return;
+      }
+      if (!identifier.includes("@")) {
+        setSaving(false);
+        setToast({ tone: "error", text: "Enter a valid email address." });
+        return;
+      }
+    }
+
     const authAction =
       authMode === "sign-in"
         ? supabase.auth.signInWithPassword({
-            email: authEmail.trim(),
+            email: emailForPassword,
             password: authPassword,
           })
         : supabase.auth.signUp({
-            email: authEmail.trim(),
+            email: emailForPassword,
             password: authPassword,
-            options:
-              typeof window === "undefined"
-                ? undefined
-                : {
-                    emailRedirectTo: `${window.location.origin}/auth/callback`,
-                  },
+            options: {
+              emailRedirectTo: getAuthRedirectUrl(),
+              data: {
+                username: normaliseUsername(authUsername),
+              },
+            },
           });
     const { error } = await authAction;
     setSaving(false);
@@ -335,6 +389,12 @@ export default function Home() {
     }
 
     const code = new URLSearchParams(window.location.search).get("code");
+    const authError = new URLSearchParams(window.location.search).get("auth_error");
+    if (authError) {
+      setToast({ tone: "error", text: authError });
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+
     if (code) {
       supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
         window.history.replaceState({}, "", window.location.pathname);
@@ -814,11 +874,13 @@ export default function Home() {
           authEmail={authEmail}
           authMode={authMode}
           authPassword={authPassword}
+          authUsername={authUsername}
           disabled={saving || !supabaseConfigured}
           onEmail={setAuthEmail}
           onMode={setAuthMode}
           onPassword={setAuthPassword}
           onSubmit={handleAuth}
+          onUsername={setAuthUsername}
         />
       ) : (
       <section className="grid gap-4 lg:grid-cols-[300px_1fr]">
@@ -993,20 +1055,24 @@ function AuthPanel({
   authEmail,
   authMode,
   authPassword,
+  authUsername,
   disabled,
   onEmail,
   onMode,
   onPassword,
   onSubmit,
+  onUsername,
 }: {
   authEmail: string;
   authMode: "sign-in" | "sign-up";
   authPassword: string;
+  authUsername: string;
   disabled: boolean;
   onEmail: (value: string) => void;
   onMode: (value: "sign-in" | "sign-up") => void;
   onPassword: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
+  onUsername: (value: string) => void;
 }) {
   return (
     <section className="mx-auto w-full max-w-md rounded border border-stone-300 bg-white p-5">
@@ -1014,16 +1080,33 @@ function AuthPanel({
         {authMode === "sign-in" ? "Sign in" : "Create account"}
       </h2>
       <p className="mt-1 text-sm text-stone-600">
-        Use your email and password to access your private stocktake data.
+        {authMode === "sign-in"
+          ? "Use your username or email and password to access your private stocktake data."
+          : "Choose a username, then confirm your email before signing in."}
       </p>
       <form className="mt-5 space-y-3" onSubmit={onSubmit}>
+        {authMode === "sign-up" && (
+          <div>
+            <label className="text-xs font-bold uppercase text-stone-600">Username</label>
+            <input
+              autoComplete="username"
+              className="mt-1 w-full rounded border border-stone-300 px-3 py-3"
+              onChange={(event) => onUsername(event.target.value)}
+              pattern="[A-Za-z0-9_]{3,30}"
+              placeholder="warehouse_admin"
+              value={authUsername}
+            />
+          </div>
+        )}
         <div>
-          <label className="text-xs font-bold uppercase text-stone-600">Email</label>
+          <label className="text-xs font-bold uppercase text-stone-600">
+            {authMode === "sign-in" ? "Username or email" : "Email"}
+          </label>
           <input
-            autoComplete="email"
+            autoComplete={authMode === "sign-in" ? "username" : "email"}
             className="mt-1 w-full rounded border border-stone-300 px-3 py-3"
             onChange={(event) => onEmail(event.target.value)}
-            type="email"
+            type={authMode === "sign-in" ? "text" : "email"}
             value={authEmail}
           />
         </div>
