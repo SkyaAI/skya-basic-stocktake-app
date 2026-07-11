@@ -178,10 +178,6 @@ export default function Home() {
     event.preventDefault();
     if (!supabase || !selectedSessionId) return;
     const count = Number(countInput);
-    if (!matchedProduct) {
-      setToast({ tone: "error", text: "Choose a known product or add it first." });
-      return;
-    }
     if (!countInput || Number.isNaN(count)) {
       setToast({ tone: "error", text: "Count is required." });
       return;
@@ -192,9 +188,43 @@ export default function Home() {
     }
 
     setSaving(true);
+    let productForEntry = matchedProduct;
+
+    if (!productForEntry) {
+      if (!normalisedCode || !newProductName.trim() || !newProductCategoryId) {
+        setSaving(false);
+        setToast({
+          tone: "error",
+          text: "Add the product name and category, then Save again.",
+        });
+        return;
+      }
+
+      const { data: newProduct, error: productError } = await supabase
+        .from("products")
+        .insert({
+          code: normalisedCode,
+          name: newProductName.trim(),
+          category_id: newProductCategoryId,
+        })
+        .select("*, categories(*)")
+        .single();
+
+      if (productError) {
+        setSaving(false);
+        setToast({
+          tone: "error",
+          text: "Could not add product. Check for duplicate codes.",
+        });
+        return;
+      }
+
+      productForEntry = newProduct as Product;
+    }
+
     const { error } = await supabase.from("stocktake_entries").insert({
       session_id: selectedSessionId,
-      product_id: matchedProduct.id,
+      product_id: productForEntry.id,
       count,
     });
     setSaving(false);
@@ -204,8 +234,10 @@ export default function Home() {
     }
     setCodeInput("");
     setCountInput("");
+    setNewProductName("");
+    setNewProductCategoryId("");
     setToast({ tone: "ok", text: "Entry saved." });
-    await loadEntries(selectedSessionId);
+    await loadAll(selectedSessionId);
   }
 
   async function updateEntry(entryId: string) {
@@ -556,7 +588,10 @@ function ProductLookup({
   return (
     <form className="mt-4 rounded border border-amber-300 bg-amber-50 p-3" onSubmit={onAddProduct}>
       <p className="font-black text-amber-950">Product not found. Add it to the catalogue?</p>
-      <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_180px_auto]">
+      <p className="mt-1 text-sm text-amber-900">
+        Fill these fields, then press Save to add the product and count together.
+      </p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
         <input
           className="rounded border border-amber-300 px-3 py-2"
           placeholder="Product name"
@@ -575,8 +610,8 @@ function ProductLookup({
             </option>
           ))}
         </select>
-        <button className="rounded bg-amber-700 px-3 py-2 font-black text-white">
-          Confirm
+        <button className="rounded bg-amber-700 px-3 py-2 font-black text-white sm:col-span-2">
+          Add product only
         </button>
       </div>
     </form>
