@@ -240,6 +240,12 @@ export default function Home() {
         : supabase.auth.signUp({
             email: authEmail.trim(),
             password: authPassword,
+            options:
+              typeof window === "undefined"
+                ? undefined
+                : {
+                    emailRedirectTo: `${window.location.origin}/auth/callback`,
+                  },
           });
     const { error } = await authAction;
     setSaving(false);
@@ -327,6 +333,15 @@ export default function Home() {
       setLoading(false);
       return;
     }
+
+    const code = new URLSearchParams(window.location.search).get("code");
+    if (code) {
+      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
+        window.history.replaceState({}, "", window.location.pathname);
+        if (error) setToast({ tone: "error", text: error.message });
+      });
+    }
+
     let mounted = true;
     supabase.auth.getUser().then(({ data }) => {
       if (!mounted) return;
