@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 
 type Category = { id: string; name: string };
@@ -162,6 +163,11 @@ function parseCatalogueImport(text: string): CatalogueImportRow[] {
 export default function Home() {
   const supabase = useMemo(() => (supabaseConfigured ? createClient() : null), []);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authMode, setAuthMode] = useState<"sign-in" | "sign-up">("sign-in");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [categories, setCategories] = useState<Category[]>([]);
@@ -221,8 +227,49 @@ export default function Home() {
     return totals;
   }, [entries]);
 
+  async function handleAuth(event: FormEvent) {
+    event.preventDefault();
+    if (!supabase) return;
+    setSaving(true);
+    const authAction =
+      authMode === "sign-in"
+        ? supabase.auth.signInWithPassword({
+            email: authEmail.trim(),
+            password: authPassword,
+          })
+        : supabase.auth.signUp({
+            email: authEmail.trim(),
+            password: authPassword,
+          });
+    const { error } = await authAction;
+    setSaving(false);
+    if (error) {
+      setToast({ tone: "error", text: error.message });
+      return;
+    }
+    setToast({
+      tone: "ok",
+      text:
+        authMode === "sign-in"
+          ? "Signed in."
+          : "Account created. Check your email if confirmation is enabled.",
+    });
+  }
+
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setUser(null);
+    setSessions([]);
+    setSelectedSessionId("");
+    setCategories([]);
+    setProducts([]);
+    setEntries([]);
+    setToast({ tone: "ok", text: "Signed out." });
+  }
+
   async function loadAll(sessionId = selectedSessionId) {
-    if (!supabase) {
+    if (!supabase || !user) {
       setLoading(false);
       return;
     }
@@ -232,11 +279,13 @@ export default function Home() {
       supabase
         .from("stocktake_sessions")
         .select("*")
+        .eq("user_id", user.id)
         .order("created_at", { ascending: false }),
-      supabase.from("categories").select("*").order("name"),
+      supabase.from("categories").select("*").eq("user_id", user.id).order("name"),
       supabase
         .from("products")
         .select("*, categories(*)")
+        .eq("user_id", user.id)
         .order("code", { ascending: true }),
     ]);
 
@@ -258,11 +307,12 @@ export default function Home() {
   }
 
   async function loadEntries(sessionId: string) {
-    if (!supabase || !sessionId) return;
+    if (!supabase || !user || !sessionId) return;
     const { data, error } = await supabase
       .from("stocktake_entries")
       .select("*, products(*, categories(*))")
       .eq("session_id", sessionId)
+      .eq("user_id", user.id)
       .order("created_at", { ascending: false });
     if (error) {
       setToast({ tone: "error", text: "Could not load entries." });
@@ -272,9 +322,41 @@ export default function Home() {
   }
 
   useEffect(() => {
-    loadAll();
+    if (!supabase) {
+      setAuthLoading(false);
+      setLoading(false);
+      return;
+    }
+    let mounted = true;
+    supabase.auth.getUser().then(({ data }) => {
+      if (!mounted) return;
+      setUser(data.user);
+      setAuthLoading(false);
+      if (!data.user) setLoading(false);
+    });
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (!session?.user) {
+        setSessions([]);
+        setSelectedSessionId("");
+        setCategories([]);
+        setProducts([]);
+        setEntries([]);
+      }
+    });
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase]);
+
+  useEffect(() => {
+    if (user) loadAll("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   useEffect(() => {
     if (selectedSessionId) loadEntries(selectedSessionId);
@@ -283,10 +365,10 @@ export default function Home() {
 
   async function createSession(event: FormEvent) {
     event.preventDefault();
-    if (!supabase || !newSessionName.trim()) return;
+    if (!supabase || !user || !newSessionName.trim()) return;
     const { data, error } = await supabase
       .from("stocktake_sessions")
-      .insert({ name: newSessionName.trim(), status: "open" })
+      .insert({ name: newSessionName.trim(), status: "open", user_id: user.id })
       .select()
       .single();
     if (error) {
@@ -300,7 +382,7 @@ export default function Home() {
 
   async function saveEntry(event: FormEvent) {
     event.preventDefault();
-    if (!supabase || !selectedSessionId) return;
+    if (!supabase || !user || !selectedSessionId) return;
     const count = Number(countInput);
     if (!countInput || Number.isNaN(count)) {
       setToast({ tone: "error", text: "Count is required." });
@@ -330,6 +412,7 @@ export default function Home() {
           code: normalisedCode,
           name: newProductName.trim(),
           category_id: newProductCategoryId,
+          user_id: user.id,
         })
         .select("*, categories(*)")
         .single();
@@ -350,6 +433,7 @@ export default function Home() {
       session_id: selectedSessionId,
       product_id: productForEntry.id,
       count,
+      user_id: user.id,
     });
     setSaving(false);
     if (error) {
@@ -365,7 +449,7 @@ export default function Home() {
   }
 
   async function updateEntry(entryId: string) {
-    if (!supabase) return;
+    if (!supabase || !user) return;
     const count = Number(editingCount);
     if (!editingCount || Number.isNaN(count) || count < 0) {
       setToast({ tone: "error", text: "Enter a count of 0 or more." });
@@ -374,7 +458,8 @@ export default function Home() {
     const { error } = await supabase
       .from("stocktake_entries")
       .update({ count })
-      .eq("id", entryId);
+      .eq("id", entryId)
+      .eq("user_id", user.id);
     if (error) {
       setToast({ tone: "error", text: "Could not update entry." });
       return;
@@ -386,8 +471,12 @@ export default function Home() {
   }
 
   async function deleteEntry(entryId: string) {
-    if (!supabase || !window.confirm("Delete this count entry?")) return;
-    const { error } = await supabase.from("stocktake_entries").delete().eq("id", entryId);
+    if (!supabase || !user || !window.confirm("Delete this count entry?")) return;
+    const { error } = await supabase
+      .from("stocktake_entries")
+      .delete()
+      .eq("id", entryId)
+      .eq("user_id", user.id);
     if (error) {
       setToast({ tone: "error", text: "Could not delete entry." });
       return;
@@ -398,8 +487,10 @@ export default function Home() {
 
   async function addCategory(event: FormEvent) {
     event.preventDefault();
-    if (!supabase || !categoryName.trim()) return;
-    const { error } = await supabase.from("categories").insert({ name: categoryName.trim() });
+    if (!supabase || !user || !categoryName.trim()) return;
+    const { error } = await supabase
+      .from("categories")
+      .insert({ name: categoryName.trim(), user_id: user.id });
     if (error) {
       setToast({ tone: "error", text: "Could not add category." });
       return;
@@ -411,7 +502,7 @@ export default function Home() {
 
   async function addProduct(event: FormEvent, inline = false) {
     event.preventDefault();
-    if (!supabase) return;
+    if (!supabase || !user) return;
     const draft = inline
       ? {
           code: normalisedCode,
@@ -431,6 +522,7 @@ export default function Home() {
       code: draft.code,
       name: draft.name.trim(),
       category_id: draft.category_id,
+      user_id: user.id,
     });
     if (error) {
       setToast({ tone: "error", text: "Could not add product. Check for duplicate codes." });
@@ -444,11 +536,12 @@ export default function Home() {
   }
 
   async function renameCategory(category: Category, name: string) {
-    if (!supabase || !name.trim() || name === category.name) return;
+    if (!supabase || !user || !name.trim() || name === category.name) return;
     const { error } = await supabase
       .from("categories")
       .update({ name: name.trim() })
-      .eq("id", category.id);
+      .eq("id", category.id)
+      .eq("user_id", user.id);
     if (error) {
       setToast({ tone: "error", text: "Could not rename category." });
       return;
@@ -457,8 +550,12 @@ export default function Home() {
   }
 
   async function updateProduct(product: Product, patch: Partial<Product>) {
-    if (!supabase) return;
-    const { error } = await supabase.from("products").update(patch).eq("id", product.id);
+    if (!supabase || !user) return;
+    const { error } = await supabase
+      .from("products")
+      .update(patch)
+      .eq("id", product.id)
+      .eq("user_id", user.id);
     if (error) {
       setToast({ tone: "error", text: "Could not update product." });
       return;
@@ -497,7 +594,7 @@ export default function Home() {
   async function importCatalogueTemplate(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
-    if (!file || !supabase) return;
+    if (!file || !supabase || !user) return;
 
     if (file.name.toLowerCase().endsWith(".xlsx")) {
       setToast({
@@ -519,7 +616,8 @@ export default function Home() {
 
       const { data: categoryData, error: categoryLoadError } = await supabase
         .from("categories")
-        .select("*");
+        .select("*")
+        .eq("user_id", user.id);
       if (categoryLoadError) throw categoryLoadError;
 
       const categoryByName = new Map(
@@ -533,7 +631,7 @@ export default function Home() {
         if (categoryByName.has(categoryNameFromFile.toLowerCase())) continue;
         const { data, error } = await supabase
           .from("categories")
-          .insert({ name: categoryNameFromFile })
+          .insert({ name: categoryNameFromFile, user_id: user.id })
           .select()
           .single();
         if (error) throw error;
@@ -543,7 +641,8 @@ export default function Home() {
 
       const { data: productData, error: productLoadError } = await supabase
         .from("products")
-        .select("*");
+        .select("*")
+        .eq("user_id", user.id);
       if (productLoadError) throw productLoadError;
 
       const productByCode = new Map(
@@ -558,13 +657,15 @@ export default function Home() {
           const { error } = await supabase
             .from("products")
             .update({ name: row.name, category_id: category.id })
-            .eq("id", existingProduct.id);
+            .eq("id", existingProduct.id)
+            .eq("user_id", user.id);
           if (error) throw error;
         } else {
           const { error } = await supabase.from("products").insert({
             code: row.code,
             name: row.name,
             category_id: category.id,
+            user_id: user.id,
           });
           if (error) throw error;
         }
@@ -581,7 +682,7 @@ export default function Home() {
   }
 
   async function wipeAllData() {
-    if (!supabase) return;
+    if (!supabase || !user) return;
     const warned = window.confirm(
       "Warning: this will permanently delete all stocktake sessions, entries, products, and categories. Continue?",
     );
@@ -592,22 +693,34 @@ export default function Home() {
     );
     if (confirmation !== "WIPE") return;
 
-    const entryDelete = await supabase.from("stocktake_entries").delete().not("id", "is", null);
+    const entryDelete = await supabase
+      .from("stocktake_entries")
+      .delete()
+      .eq("user_id", user.id);
     if (entryDelete.error) {
       setToast({ tone: "error", text: "Could not delete stocktake entries." });
       return;
     }
-    const sessionDelete = await supabase.from("stocktake_sessions").delete().not("id", "is", null);
+    const sessionDelete = await supabase
+      .from("stocktake_sessions")
+      .delete()
+      .eq("user_id", user.id);
     if (sessionDelete.error) {
       setToast({ tone: "error", text: "Could not delete stocktake sessions." });
       return;
     }
-    const productDelete = await supabase.from("products").delete().not("id", "is", null);
+    const productDelete = await supabase
+      .from("products")
+      .delete()
+      .eq("user_id", user.id);
     if (productDelete.error) {
       setToast({ tone: "error", text: "Could not delete products." });
       return;
     }
-    const categoryDelete = await supabase.from("categories").delete().not("id", "is", null);
+    const categoryDelete = await supabase
+      .from("categories")
+      .delete()
+      .eq("user_id", user.id);
     if (categoryDelete.error) {
       setToast({ tone: "error", text: "Could not delete categories." });
       return;
@@ -620,7 +733,9 @@ export default function Home() {
   }
 
   const statusText = supabaseConfigured
-    ? `${entries.length} saved ${entries.length === 1 ? "entry" : "entries"}`
+    ? user
+      ? `${entries.length} saved ${entries.length === 1 ? "entry" : "entries"}`
+      : "Sign in required"
     : "Supabase env required";
 
   return (
@@ -634,8 +749,24 @@ export default function Home() {
             Count stock. See the report now.
           </h1>
         </div>
-        <div className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
-          {statusText}
+        <div className="flex flex-wrap items-center gap-2">
+          {user?.email && (
+            <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
+              {user.email}
+            </span>
+          )}
+          <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
+            {statusText}
+          </span>
+          {user && (
+            <button
+              className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-black text-stone-800"
+              onClick={signOut}
+              type="button"
+            >
+              Sign Out
+            </button>
+          )}
         </div>
       </header>
 
@@ -661,6 +792,20 @@ export default function Home() {
         </button>
       )}
 
+      {authLoading ? (
+        <Skeleton label="Checking sign in" />
+      ) : !user ? (
+        <AuthPanel
+          authEmail={authEmail}
+          authMode={authMode}
+          authPassword={authPassword}
+          disabled={saving || !supabaseConfigured}
+          onEmail={setAuthEmail}
+          onMode={setAuthMode}
+          onPassword={setAuthPassword}
+          onSubmit={handleAuth}
+        />
+      ) : (
       <section className="grid gap-4 lg:grid-cols-[300px_1fr]">
         <aside className="space-y-4">
           <div className="rounded border border-stone-300 bg-white p-3">
@@ -824,7 +969,77 @@ export default function Home() {
           )}
         </section>
       </section>
+      )}
     </main>
+  );
+}
+
+function AuthPanel({
+  authEmail,
+  authMode,
+  authPassword,
+  disabled,
+  onEmail,
+  onMode,
+  onPassword,
+  onSubmit,
+}: {
+  authEmail: string;
+  authMode: "sign-in" | "sign-up";
+  authPassword: string;
+  disabled: boolean;
+  onEmail: (value: string) => void;
+  onMode: (value: "sign-in" | "sign-up") => void;
+  onPassword: (value: string) => void;
+  onSubmit: (event: FormEvent) => void;
+}) {
+  return (
+    <section className="mx-auto w-full max-w-md rounded border border-stone-300 bg-white p-5">
+      <h2 className="text-2xl font-black text-stone-950">
+        {authMode === "sign-in" ? "Sign in" : "Create account"}
+      </h2>
+      <p className="mt-1 text-sm text-stone-600">
+        Use your email and password to access your private stocktake data.
+      </p>
+      <form className="mt-5 space-y-3" onSubmit={onSubmit}>
+        <div>
+          <label className="text-xs font-bold uppercase text-stone-600">Email</label>
+          <input
+            autoComplete="email"
+            className="mt-1 w-full rounded border border-stone-300 px-3 py-3"
+            onChange={(event) => onEmail(event.target.value)}
+            type="email"
+            value={authEmail}
+          />
+        </div>
+        <div>
+          <label className="text-xs font-bold uppercase text-stone-600">Password</label>
+          <input
+            autoComplete={authMode === "sign-in" ? "current-password" : "new-password"}
+            className="mt-1 w-full rounded border border-stone-300 px-3 py-3"
+            minLength={6}
+            onChange={(event) => onPassword(event.target.value)}
+            type="password"
+            value={authPassword}
+          />
+        </div>
+        <button
+          className="w-full rounded bg-emerald-800 px-4 py-3 font-black text-white"
+          disabled={disabled}
+        >
+          {authMode === "sign-in" ? "Sign In" : "Create Account"}
+        </button>
+      </form>
+      <button
+        className="mt-4 w-full rounded border border-stone-300 bg-white px-4 py-3 text-sm font-black text-stone-800"
+        onClick={() => onMode(authMode === "sign-in" ? "sign-up" : "sign-in")}
+        type="button"
+      >
+        {authMode === "sign-in"
+          ? "Need an account? Create one"
+          : "Already have an account? Sign in"}
+      </button>
+    </section>
   );
 }
 
