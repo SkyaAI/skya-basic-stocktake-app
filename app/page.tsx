@@ -37,6 +37,45 @@ function normaliseProductCode(raw: string) {
   });
 }
 
+function formatDateTime(value: string | Date) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function fileSafeName(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function csvCell(value: string | number) {
+  return `"${String(value).replaceAll('"', '""')}"`;
+}
+
+function htmlCell(value: string | number) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function downloadTextFile(filename: string, content: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function Home() {
   const supabase = useMemo(() => (supabaseConfigured ? createClient() : null), []);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -85,6 +124,7 @@ export default function Home() {
     }
     return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [entries]);
+  const reportGeneratedAt = useMemo(() => new Date(), [entries, selectedSessionId]);
 
   const sessionProductAverages = useMemo(() => {
     const totals = new Map<string, { sum: number; count: number }>();
@@ -520,7 +560,11 @@ export default function Home() {
           )}
 
           {mode === "report" && (
-            <Report session={selectedSession} groups={reportGroups} />
+            <Report
+              generatedAt={reportGeneratedAt}
+              session={selectedSession}
+              groups={reportGroups}
+            />
           )}
 
           {mode === "catalogue" && (
@@ -666,6 +710,9 @@ function EntryList({
                     {entry.products?.categories?.name ?? "Uncategorised"}
                     {isAnomaly ? " · Count anomaly" : ""}
                   </p>
+                  <p className="mt-1 text-xs font-semibold text-stone-500">
+                    Saved {formatDateTime(entry.created_at)}
+                  </p>
                 </div>
                 <p className="text-2xl font-black text-stone-950">{entry.count}</p>
               </div>
@@ -710,22 +757,215 @@ function EntryList({
 }
 
 function Report({
+  generatedAt,
   groups,
   session,
 }: {
+  generatedAt: Date;
   groups: [string, { total: number; rows: Entry[] }][];
   session?: Session;
 }) {
+  const sessionName = session?.name ?? "Stocktake Report";
+  const generatedStamp = formatDateTime(generatedAt);
+  const totalUnits = groups.reduce((sum, [, group]) => sum + group.total, 0);
+  const filenameBase = `${fileSafeName(sessionName) || "stocktake-report"}-${generatedAt
+    .toISOString()
+    .slice(0, 10)}`;
+  const rowData = groups.flatMap(([category, group]) =>
+    group.rows.map((entry) => ({
+      category,
+      code: entry.products?.code ?? "",
+      name: entry.products?.name ?? "",
+      count: entry.count,
+      savedAt: formatDateTime(entry.created_at),
+    })),
+  );
+
+  function exportCsv() {
+    const rows = [
+      ["Session", sessionName],
+      ["Generated", generatedStamp],
+      [],
+      ["Category", "Product Code", "Product Name", "Count", "Saved At"],
+      ...rowData.map((row) => [
+        row.category,
+        row.code,
+        row.name,
+        String(row.count),
+        row.savedAt,
+      ]),
+      [],
+      ["Total Units", String(totalUnits)],
+    ];
+
+    downloadTextFile(
+      `${filenameBase}.csv`,
+      rows.map((row) => row.map(csvCell).join(",")).join("\n"),
+      "text/csv;charset=utf-8",
+    );
+  }
+
+  function exportExcel() {
+    const bodyRows = rowData
+      .map(
+        (row) => `
+          <tr>
+            <td>${htmlCell(row.category)}</td>
+            <td>${htmlCell(row.code)}</td>
+            <td>${htmlCell(row.name)}</td>
+            <td>${htmlCell(row.count)}</td>
+            <td>${htmlCell(row.savedAt)}</td>
+          </tr>`,
+      )
+      .join("");
+    const workbook = `
+      <html>
+        <head><meta charset="utf-8" /></head>
+        <body>
+          <table>
+            <tr><th colspan="5">Skya Stocktake Report</th></tr>
+            <tr><td>Session</td><td colspan="4">${htmlCell(sessionName)}</td></tr>
+            <tr><td>Generated</td><td colspan="4">${htmlCell(generatedStamp)}</td></tr>
+            <tr></tr>
+            <tr>
+              <th>Category</th>
+              <th>Product Code</th>
+              <th>Product Name</th>
+              <th>Count</th>
+              <th>Saved At</th>
+            </tr>
+            ${bodyRows}
+            <tr></tr>
+            <tr><td>Total Units</td><td colspan="4">${htmlCell(totalUnits)}</td></tr>
+          </table>
+        </body>
+      </html>`;
+
+    downloadTextFile(
+      `${filenameBase}.xls`,
+      workbook,
+      "application/vnd.ms-excel;charset=utf-8",
+    );
+  }
+
+  function reportPrintHtml(mode: "print" | "pdf") {
+    const groupedRows = groups
+      .map(
+        ([category, group]) => `
+          <section>
+            <h2>${htmlCell(category)} <span>${htmlCell(group.total)}</span></h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>Product Code</th>
+                  <th>Product Name</th>
+                  <th>Count</th>
+                  <th>Saved At</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${group.rows
+                  .map(
+                    (entry) => `
+                      <tr>
+                        <td>${htmlCell(entry.products?.code ?? "")}</td>
+                        <td>${htmlCell(entry.products?.name ?? "")}</td>
+                        <td>${htmlCell(entry.count)}</td>
+                        <td>${htmlCell(formatDateTime(entry.created_at))}</td>
+                      </tr>`,
+                  )
+                  .join("")}
+              </tbody>
+            </table>
+          </section>`,
+      )
+      .join("");
+
+    return `
+      <!doctype html>
+      <html>
+        <head>
+          <title>${htmlCell(sessionName)} ${mode === "pdf" ? "PDF" : "Print"}</title>
+          <style>
+            body { color: #111; font-family: Arial, sans-serif; margin: 32px; }
+            header { border-bottom: 2px solid #111; margin-bottom: 20px; padding-bottom: 12px; }
+            h1 { font-size: 28px; margin: 0 0 6px; }
+            h2 { align-items: center; background: #111; color: white; display: flex; font-size: 18px; justify-content: space-between; margin: 20px 0 0; padding: 8px 10px; }
+            p { margin: 4px 0; }
+            table { border-collapse: collapse; width: 100%; }
+            th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+            th { background: #f0f0f0; }
+            td:nth-child(3), th:nth-child(3) { text-align: right; }
+            .total { font-size: 16px; font-weight: 700; margin-top: 16px; text-align: right; }
+          </style>
+        </head>
+        <body>
+          <header>
+            <h1>Skya Stocktake Report</h1>
+            <p>Session: ${htmlCell(sessionName)}</p>
+            <p>Generated: ${htmlCell(generatedStamp)}</p>
+          </header>
+          ${groupedRows || "<p>No report rows yet.</p>"}
+          <p class="total">Total units: ${htmlCell(totalUnits)}</p>
+        </body>
+      </html>`;
+  }
+
+  function openPrintableReport(mode: "print" | "pdf") {
+    const printWindow = window.open("", "_blank", "width=900,height=700");
+    if (!printWindow) {
+      window.print();
+      return;
+    }
+    printWindow.document.write(reportPrintHtml(mode));
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+  }
+
   return (
     <section className="rounded border border-stone-300 bg-white p-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 className="text-2xl font-black text-stone-950">Report</h2>
           <p className="text-sm text-stone-600">{session?.name ?? "Select a session"}</p>
+          <p className="text-xs font-semibold text-stone-500">
+            Generated {generatedStamp}
+          </p>
         </div>
-        <p className="rounded bg-stone-100 px-3 py-2 text-sm font-black">
-          {groups.reduce((sum, [, group]) => sum + group.total, 0)} total units
-        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-black"
+            onClick={exportCsv}
+            type="button"
+          >
+            Export CSV
+          </button>
+          <button
+            className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-black"
+            onClick={exportExcel}
+            type="button"
+          >
+            Excel
+          </button>
+          <button
+            className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-black"
+            onClick={() => openPrintableReport("pdf")}
+            type="button"
+          >
+            PDF
+          </button>
+          <button
+            className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-black"
+            onClick={() => openPrintableReport("print")}
+            type="button"
+          >
+            Print
+          </button>
+          <p className="rounded bg-stone-100 px-3 py-2 text-sm font-black">
+            {totalUnits} total units
+          </p>
+        </div>
       </div>
       <div className="mt-4 space-y-4">
         {groups.length === 0 && (
@@ -746,7 +986,12 @@ function Report({
                   key={entry.id}
                 >
                   <span className="font-black">{entry.products?.code}</span>
-                  <span>{entry.products?.name}</span>
+                  <span>
+                    <span className="block">{entry.products?.name}</span>
+                    <span className="block text-xs font-semibold text-stone-500">
+                      Saved {formatDateTime(entry.created_at)}
+                    </span>
+                  </span>
                   <span className="text-right font-black">{entry.count}</span>
                 </div>
               ))}
