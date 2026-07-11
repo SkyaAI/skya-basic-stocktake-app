@@ -1,6 +1,14 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  ChangeEvent,
+  FormEvent,
+  type RefObject,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createClient } from "@/lib/supabase/client";
 
 type Category = { id: string; name: string };
@@ -21,6 +29,11 @@ type Entry = {
   products?: Product | null;
 };
 type Toast = { tone: "ok" | "error"; text: string } | null;
+type CatalogueImportRow = {
+  category: string;
+  code: string;
+  name: string;
+};
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -76,8 +89,79 @@ function downloadTextFile(filename: string, content: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
+function parseCsvRows(text: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === '"' && inQuotes && next === '"') {
+      cell += '"';
+      index += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === "," && !inQuotes) {
+      row.push(cell.trim());
+      cell = "";
+    } else if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(cell.trim());
+      if (row.some(Boolean)) rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+
+  row.push(cell.trim());
+  if (row.some(Boolean)) rows.push(row);
+  return rows;
+}
+
+function parseCatalogueImport(text: string): CatalogueImportRow[] {
+  const trimmed = text.trim();
+  const rows = trimmed.includes("<table")
+    ? Array.from(
+        new DOMParser()
+          .parseFromString(trimmed, "text/html")
+          .querySelectorAll("tr"),
+      ).map((row) =>
+        Array.from(row.querySelectorAll("th,td")).map((cell) =>
+          cell.textContent?.trim() ?? "",
+        ),
+      )
+    : parseCsvRows(trimmed);
+
+  const headerIndex = rows.findIndex((row) =>
+    row.map((cell) => cell.toLowerCase()).includes("product code"),
+  );
+  const dataRows = rows.slice(headerIndex >= 0 ? headerIndex + 1 : 1);
+
+  return dataRows
+    .map((row) => ({
+      category: row[0]?.trim() ?? "",
+      code: normaliseProductCode(row[1] ?? ""),
+      name: row[2]?.trim() ?? "",
+    }))
+    .filter((row) => row.category && row.code && row.name)
+    .filter(
+      (row) =>
+        !(
+          row.category === "Sample Category" &&
+          row.code === "CODE-0001" &&
+          row.name === "Sample Product Name"
+        ),
+    );
+}
+
 export default function Home() {
   const supabase = useMemo(() => (supabaseConfigured ? createClient() : null), []);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [categories, setCategories] = useState<Category[]>([]);
@@ -383,6 +467,153 @@ export default function Home() {
     await loadAll(selectedSessionId);
   }
 
+  function downloadCatalogueTemplate() {
+    const template = `
+      <html>
+        <head><meta charset="utf-8" /></head>
+        <body>
+          <table>
+            <tr>
+              <th>Category</th>
+              <th>Product Code</th>
+              <th>Product Name</th>
+            </tr>
+            <tr>
+              <td>Sample Category</td>
+              <td>CODE-0001</td>
+              <td>Sample Product Name</td>
+            </tr>
+          </table>
+        </body>
+      </html>`;
+
+    downloadTextFile(
+      "skya-product-catalogue-template.xls",
+      template,
+      "application/vnd.ms-excel;charset=utf-8",
+    );
+  }
+
+  async function importCatalogueTemplate(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !supabase) return;
+
+    if (file.name.toLowerCase().endsWith(".xlsx")) {
+      setToast({
+        tone: "error",
+        text: "Please save the filled template as .xls or .csv, then import it.",
+      });
+      return;
+    }
+
+    try {
+      const rows = parseCatalogueImport(await file.text());
+      if (rows.length === 0) {
+        setToast({
+          tone: "error",
+          text: "No catalogue rows found. Keep headings: Category, Product Code, Product Name.",
+        });
+        return;
+      }
+
+      const { data: categoryData, error: categoryLoadError } = await supabase
+        .from("categories")
+        .select("*");
+      if (categoryLoadError) throw categoryLoadError;
+
+      const categoryByName = new Map(
+        ((categoryData ?? []) as Category[]).map((category) => [
+          category.name.toLowerCase(),
+          category,
+        ]),
+      );
+
+      for (const categoryNameFromFile of [...new Set(rows.map((row) => row.category))]) {
+        if (categoryByName.has(categoryNameFromFile.toLowerCase())) continue;
+        const { data, error } = await supabase
+          .from("categories")
+          .insert({ name: categoryNameFromFile })
+          .select()
+          .single();
+        if (error) throw error;
+        const category = data as Category;
+        categoryByName.set(category.name.toLowerCase(), category);
+      }
+
+      const { data: productData, error: productLoadError } = await supabase
+        .from("products")
+        .select("*");
+      if (productLoadError) throw productLoadError;
+
+      const productByCode = new Map(
+        ((productData ?? []) as Product[]).map((product) => [product.code, product]),
+      );
+
+      for (const row of rows) {
+        const category = categoryByName.get(row.category.toLowerCase());
+        if (!category) continue;
+        const existingProduct = productByCode.get(row.code);
+        if (existingProduct) {
+          const { error } = await supabase
+            .from("products")
+            .update({ name: row.name, category_id: category.id })
+            .eq("id", existingProduct.id);
+          if (error) throw error;
+        } else {
+          const { error } = await supabase.from("products").insert({
+            code: row.code,
+            name: row.name,
+            category_id: category.id,
+          });
+          if (error) throw error;
+        }
+      }
+
+      setToast({ tone: "ok", text: `Imported ${rows.length} catalogue rows.` });
+      await loadAll(selectedSessionId);
+    } catch {
+      setToast({
+        tone: "error",
+        text: "Could not import the catalogue. Check the template format and try again.",
+      });
+    }
+  }
+
+  async function wipeAllData() {
+    if (!supabase) return;
+    const confirmation = window.prompt(
+      'This deletes all sessions, entries, products, and categories. Type "WIPE" to continue.',
+    );
+    if (confirmation !== "WIPE") return;
+
+    const entryDelete = await supabase.from("stocktake_entries").delete().not("id", "is", null);
+    if (entryDelete.error) {
+      setToast({ tone: "error", text: "Could not delete stocktake entries." });
+      return;
+    }
+    const sessionDelete = await supabase.from("stocktake_sessions").delete().not("id", "is", null);
+    if (sessionDelete.error) {
+      setToast({ tone: "error", text: "Could not delete stocktake sessions." });
+      return;
+    }
+    const productDelete = await supabase.from("products").delete().not("id", "is", null);
+    if (productDelete.error) {
+      setToast({ tone: "error", text: "Could not delete products." });
+      return;
+    }
+    const categoryDelete = await supabase.from("categories").delete().not("id", "is", null);
+    if (categoryDelete.error) {
+      setToast({ tone: "error", text: "Could not delete categories." });
+      return;
+    }
+
+    setSelectedSessionId("");
+    setEntries([]);
+    setToast({ tone: "ok", text: "All demo data wiped. Import a catalogue or add products." });
+    await loadAll("");
+  }
+
   const statusText = supabaseConfigured
     ? `${entries.length} saved ${entries.length === 1 ? "entry" : "entries"}`
     : "Supabase env required";
@@ -577,8 +808,13 @@ export default function Home() {
               onAddProduct={(event) => addProduct(event, false)}
               onCategoryName={setCategoryName}
               onDraft={setCatalogueDraft}
+              onDownloadTemplate={downloadCatalogueTemplate}
+              onImportClick={() => importInputRef.current?.click()}
+              onImportTemplate={importCatalogueTemplate}
               onRenameCategory={renameCategory}
               onUpdateProduct={updateProduct}
+              onWipeAllData={wipeAllData}
+              importInputRef={importInputRef}
             />
           )}
         </section>
@@ -1007,29 +1243,76 @@ function Catalogue({
   catalogueDraft,
   categories,
   categoryName,
+  importInputRef,
   products,
   onAddCategory,
   onAddProduct,
   onCategoryName,
+  onDownloadTemplate,
   onDraft,
+  onImportClick,
+  onImportTemplate,
   onRenameCategory,
   onUpdateProduct,
+  onWipeAllData,
 }: {
   catalogueDraft: { code: string; name: string; category_id: string };
   categories: Category[];
   categoryName: string;
+  importInputRef: RefObject<HTMLInputElement | null>;
   products: Product[];
   onAddCategory: (event: FormEvent) => void;
   onAddProduct: (event: FormEvent) => void;
   onCategoryName: (value: string) => void;
+  onDownloadTemplate: () => void;
   onDraft: (value: { code: string; name: string; category_id: string }) => void;
+  onImportClick: () => void;
+  onImportTemplate: (event: ChangeEvent<HTMLInputElement>) => void;
   onRenameCategory: (category: Category, name: string) => void;
   onUpdateProduct: (product: Product, patch: Partial<Product>) => void;
+  onWipeAllData: () => void;
 }) {
   return (
     <section className="grid gap-4 xl:grid-cols-[1fr_320px]">
       <div className="rounded border border-stone-300 bg-white p-4">
-        <h2 className="text-xl font-black text-stone-950">Product Catalogue</h2>
+        <div className="flex flex-col gap-3 border-b border-stone-200 pb-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h2 className="text-xl font-black text-stone-950">Product Catalogue</h2>
+            <p className="mt-1 text-sm text-stone-600">
+              Import columns: Category, Product Code, Product Name.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-black"
+              onClick={onDownloadTemplate}
+              type="button"
+            >
+              Download Template
+            </button>
+            <button
+              className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-black"
+              onClick={onImportClick}
+              type="button"
+            >
+              Import Template
+            </button>
+            <button
+              className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm font-black text-red-800"
+              onClick={onWipeAllData}
+              type="button"
+            >
+              Wipe All Data
+            </button>
+          </div>
+          <input
+            accept=".xls,.csv,text/csv,application/vnd.ms-excel"
+            className="hidden"
+            onChange={onImportTemplate}
+            ref={importInputRef}
+            type="file"
+          />
+        </div>
         <form className="mt-4 grid gap-2 md:grid-cols-[140px_1fr_190px_auto]" onSubmit={onAddProduct}>
           <input
             className="rounded border border-stone-300 px-3 py-2 uppercase"
