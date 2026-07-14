@@ -80,6 +80,13 @@ const NAV_ITEMS: NavItem[] = [
     icon: BoxesIcon,
   },
 ];
+const SESSION_PRESETS = [
+  "Morning Count",
+  "End of Day Check",
+  "July Audit",
+  "Weekly Stocktake",
+  "Warehouse Count",
+];
 
 function normaliseProductCode(raw: string) {
   const cleaned = raw.trim().toUpperCase().replace(/\s+/g, "");
@@ -698,12 +705,22 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSessionId]);
 
-  async function createSession(event: FormEvent) {
-    event.preventDefault();
-    if (!supabase || !user || !newSessionName.trim()) return;
+  async function createNamedSession(name: string) {
+    const sessionName = name.trim();
+    if (!supabase || !user || !sessionName) return;
+
+    const existingSession = sessions.find(
+      (session) => session.name.toLowerCase() === sessionName.toLowerCase(),
+    );
+    if (existingSession) {
+      setSelectedSessionId(existingSession.id);
+      setToast({ tone: "ok", text: `${existingSession.name} selected.` });
+      return;
+    }
+
     const { data, error } = await supabase
       .from("stocktake_sessions")
-      .insert({ name: newSessionName.trim(), status: "open", user_id: user.id })
+      .insert({ name: sessionName, status: "open", user_id: user.id })
       .select()
       .single();
     if (error) {
@@ -713,6 +730,11 @@ export default function Home() {
     setNewSessionName("");
     setToast({ tone: "ok", text: "Session created." });
     await loadAll((data as Session).id);
+  }
+
+  async function createSession(event: FormEvent) {
+    event.preventDefault();
+    await createNamedSession(newSessionName);
   }
 
   async function saveEntry(event: FormEvent) {
@@ -1200,6 +1222,23 @@ export default function Home() {
                 Add
               </button>
             </form>
+            <div className="mt-3">
+              <p className="text-xs font-bold uppercase text-stone-500">
+                Quick start
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {SESSION_PRESETS.map((preset) => (
+                  <button
+                    className="rounded border border-stone-300 bg-stone-50 px-2 py-1 text-xs font-bold text-stone-700 hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+                    key={preset}
+                    onClick={() => createNamedSession(preset)}
+                    type="button"
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="mt-3 space-y-2">
               {loading && <Skeleton label="Loading sessions" />}
               {!loading && sessions.length === 0 && (
