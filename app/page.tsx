@@ -3,6 +3,7 @@
 import {
   ChangeEvent,
   FormEvent,
+  type ReactNode,
   type RefObject,
   useEffect,
   useMemo,
@@ -35,6 +36,14 @@ type CatalogueImportRow = {
   code: string;
   name: string;
 };
+type NavMode = "count" | "report" | "catalogue";
+type NavIconProps = { className?: string };
+type NavItem = {
+  id: NavMode;
+  label: string;
+  description: string;
+  icon: (props: NavIconProps) => ReactNode;
+};
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -42,6 +51,27 @@ const appUrl = process.env.NEXT_PUBLIC_APP_URL;
 const supabaseConfigured =
   Boolean(supabaseUrl && supabaseAnonKey) &&
   !supabaseUrl?.includes("YOUR-PROJECT");
+
+const NAV_ITEMS: NavItem[] = [
+  {
+    id: "count",
+    label: "Count",
+    description: "Record stock",
+    icon: ClipboardIcon,
+  },
+  {
+    id: "report",
+    label: "Report",
+    description: "Review totals",
+    icon: ChartIcon,
+  },
+  {
+    id: "catalogue",
+    label: "Catalogue",
+    description: "Manage products",
+    icon: BoxesIcon,
+  },
+];
 
 function normaliseProductCode(raw: string) {
   const cleaned = raw.trim().toUpperCase().replace(/\s+/g, "");
@@ -194,7 +224,8 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<Toast>(null);
-  const [mode, setMode] = useState<"count" | "report" | "catalogue">("count");
+  const [mode, setMode] = useState<NavMode>("count");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const [newSessionName, setNewSessionName] = useState("");
   const [codeInput, setCodeInput] = useState("");
@@ -233,6 +264,25 @@ export default function Home() {
     return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [entries]);
   const reportGeneratedAt = useMemo(() => new Date(), [entries, selectedSessionId]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMobileNavOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [mobileNavOpen]);
 
   const sessionProductAverages = useMemo(() => {
     const totals = new Map<string, { sum: number; count: number }>();
@@ -813,37 +863,86 @@ export default function Home() {
       : "Sign in required"
     : "Supabase env required";
 
+  function selectNavigationMode(nextMode: NavMode) {
+    setMode(nextMode);
+    setMobileNavOpen(false);
+  }
+
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-4 px-4 py-5 sm:px-6">
-      <header className="flex flex-col gap-3 border-b border-stone-300 pb-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.22em] text-emerald-800">
-            Skya Stocktake
-          </p>
-          <h1 className="mt-1 text-3xl font-black text-stone-950 sm:text-4xl">
-            Count stock. See the report now.
-          </h1>
+    <>
+      {user && (
+        <NavigationMenu
+          activeMode={mode}
+          onSelect={selectNavigationMode}
+          variant="desktop"
+        />
+      )}
+      {user && mobileNavOpen && (
+        <div
+          aria-label="Stocktake navigation"
+          aria-modal="true"
+          className="fixed inset-0 z-50 lg:hidden"
+          role="dialog"
+        >
+          <div
+            className="absolute inset-0 h-full w-full cursor-default bg-stone-950/45"
+            onClick={() => setMobileNavOpen(false)}
+            role="presentation"
+          />
+          <NavigationMenu
+            activeMode={mode}
+            onClose={() => setMobileNavOpen(false)}
+            onSelect={selectNavigationMode}
+            variant="mobile"
+          />
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {user?.email && (
-            <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
-              {user.email}
-            </span>
-          )}
-          <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
-            {statusText}
-          </span>
-          {user && (
-            <button
-              className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-black text-stone-800"
-              onClick={signOut}
-              type="button"
-            >
-              Sign Out
-            </button>
-          )}
-        </div>
-      </header>
+      )}
+
+      <div className={user ? "lg:pl-72" : undefined}>
+        <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-4 px-4 py-5 sm:px-6">
+          <header className="flex flex-col gap-3 border-b border-stone-300 pb-4 sm:flex-row sm:items-end sm:justify-between">
+            <div className="flex items-start gap-3">
+              {user && (
+                <button
+                  aria-controls="mobile-stocktake-navigation"
+                  aria-expanded={mobileNavOpen}
+                  aria-label="Open navigation"
+                  className="mt-1 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded border border-stone-300 bg-white text-stone-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2 lg:hidden"
+                  onClick={() => setMobileNavOpen(true)}
+                  type="button"
+                >
+                  <MenuIcon className="h-5 w-5" />
+                </button>
+              )}
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.22em] text-emerald-800">
+                  Skya Stocktake
+                </p>
+                <h1 className="mt-1 text-3xl font-black text-stone-950 sm:text-4xl">
+                  Count stock. See the report now.
+                </h1>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {user?.email && (
+                <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
+                  {user.email}
+                </span>
+              )}
+              <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
+                {statusText}
+              </span>
+              {user && (
+                <button
+                  className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-black text-stone-800 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+                  onClick={signOut}
+                  type="button"
+                >
+                  Sign Out
+                </button>
+              )}
+            </div>
+          </header>
 
       {!supabaseConfigured && (
         <div className="rounded border border-red-300 bg-red-50 p-4 text-sm text-red-900">
@@ -922,20 +1021,6 @@ export default function Home() {
         </aside>
 
         <section className="space-y-4">
-          <div className="flex gap-2 overflow-x-auto border-b border-stone-300 pb-2">
-            {(["count", "report", "catalogue"] as const).map((tab) => (
-              <button
-                key={tab}
-                className={`shrink-0 rounded px-4 py-2 text-sm font-black capitalize ${
-                  mode === tab ? "bg-stone-950 text-white" : "bg-white text-stone-700"
-                }`}
-                onClick={() => setMode(tab)}
-              >
-                {tab === "count" ? "Count" : tab}
-              </button>
-            ))}
-          </div>
-
           {mode === "count" && (
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
               <section className="rounded border border-stone-300 bg-white p-4">
@@ -1047,7 +1132,175 @@ export default function Home() {
         </section>
       </section>
       )}
-    </main>
+        </main>
+      </div>
+    </>
+  );
+}
+
+function NavigationMenu({
+  activeMode,
+  onClose,
+  onSelect,
+  variant,
+}: {
+  activeMode: NavMode;
+  onClose?: () => void;
+  onSelect: (mode: NavMode) => void;
+  variant: "desktop" | "mobile";
+}) {
+  const isMobile = variant === "mobile";
+
+  return (
+    <aside
+      className={
+        isMobile
+          ? "relative z-10 flex h-full w-80 max-w-[86vw] flex-col border-r border-stone-300 bg-stone-50 shadow-2xl"
+          : "fixed inset-y-0 left-0 z-30 hidden w-72 flex-col border-r border-stone-300 bg-stone-50/95 shadow-sm lg:flex"
+      }
+      id={isMobile ? "mobile-stocktake-navigation" : "desktop-stocktake-navigation"}
+    >
+      <div className="flex items-start justify-between border-b border-stone-300 p-5">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.22em] text-emerald-800">
+            Skya Stocktake
+          </p>
+          <p className="mt-2 text-lg font-black text-stone-950">Navigation</p>
+        </div>
+        {isMobile && (
+          <button
+            aria-label="Close navigation"
+            className="inline-flex h-10 w-10 items-center justify-center rounded border border-stone-300 bg-white text-stone-900 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+            onClick={onClose}
+            type="button"
+          >
+            <CloseIcon className="h-5 w-5" />
+          </button>
+        )}
+      </div>
+      <nav aria-label="Stocktake sections" className="flex-1 space-y-2 p-4">
+        {NAV_ITEMS.map((item) => {
+          const Icon = item.icon;
+          const active = activeMode === item.id;
+
+          return (
+            <button
+              aria-current={active ? "page" : undefined}
+              className={`flex w-full items-center gap-3 rounded border px-3 py-3 text-left transition focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2 ${
+                active
+                  ? "border-emerald-800 bg-emerald-50 text-emerald-950"
+                  : "border-transparent bg-transparent text-stone-700 hover:border-stone-300 hover:bg-white"
+              }`}
+              key={item.id}
+              onClick={() => onSelect(item.id)}
+              type="button"
+            >
+              <span
+                className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded border ${
+                  active
+                    ? "border-emerald-800 bg-emerald-800 text-white"
+                    : "border-stone-300 bg-white text-stone-700"
+                }`}
+              >
+                <Icon className="h-5 w-5" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-black">{item.label}</span>
+                <span className="block text-xs font-semibold text-stone-500">
+                  {item.description}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </nav>
+    </aside>
+  );
+}
+
+function MenuIcon({ className }: NavIconProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      <path d="M4 7h16M4 12h16M4 17h16" />
+    </svg>
+  );
+}
+
+function CloseIcon({ className }: NavIconProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      <path d="m6 6 12 12M18 6 6 18" />
+    </svg>
+  );
+}
+
+function ClipboardIcon({ className }: NavIconProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      <path d="M9 5h6M9 4a2 2 0 0 0-2 2v1h10V6a2 2 0 0 0-2-2" />
+      <path d="M7 7H5v13h14V7h-2M8 13h8M8 17h5" />
+    </svg>
+  );
+}
+
+function ChartIcon({ className }: NavIconProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      <path d="M4 19V5M4 19h16" />
+      <path d="M8 16v-5M12 16V8M16 16v-7" />
+    </svg>
+  );
+}
+
+function BoxesIcon({ className }: NavIconProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      <path d="m12 3 7 4-7 4-7-4 7-4Z" />
+      <path d="m5 12 7 4 7-4M5 17l7 4 7-4" />
+    </svg>
   );
 }
 
