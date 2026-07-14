@@ -19,6 +19,7 @@ type Product = {
   code: string;
   name: string;
   category_id: string | null;
+  location: string | null;
   categories?: Category | null;
 };
 type Session = { id: string; name: string; status: string; created_at: string };
@@ -34,6 +35,7 @@ type Toast = { tone: "ok" | "error"; text: string } | null;
 type CatalogueImportRow = {
   category: string;
   code: string;
+  location: string;
   name: string;
 };
 type UserProfile = { username: string; email: string };
@@ -212,6 +214,7 @@ function parseCatalogueRows(rows: SpreadsheetRow[]): CatalogueImportRow[] {
       code: normaliseProductCode(row[0] ?? ""),
       name: row[1]?.trim() ?? "",
       category: row[2]?.trim() ?? "",
+      location: row[3]?.trim() ?? "",
     }))
     .filter((row) => row.category && row.code && row.name)
     .filter(
@@ -219,8 +222,9 @@ function parseCatalogueRows(rows: SpreadsheetRow[]): CatalogueImportRow[] {
         !(
           row.category === "Sample Category" &&
           row.code === "CODE-0001" &&
+          (!row.location || row.location === "Sample Location") &&
           row.name === "Sample Product Name"
-      ),
+        ),
     );
 }
 
@@ -411,9 +415,11 @@ export default function Home() {
   const [editingCount, setEditingCount] = useState("");
   const [newProductName, setNewProductName] = useState("");
   const [newProductCategoryId, setNewProductCategoryId] = useState("");
+  const [newProductLocation, setNewProductLocation] = useState("");
   const [categoryName, setCategoryName] = useState("");
   const [catalogueDraft, setCatalogueDraft] = useState({
     code: "",
+    location: "",
     name: "",
     category_id: "",
   });
@@ -767,6 +773,7 @@ export default function Home() {
         .from("products")
         .insert({
           code: normalisedCode,
+          location: newProductLocation.trim() || null,
           name: newProductName.trim(),
           category_id: newProductCategoryId,
           user_id: user.id,
@@ -801,6 +808,7 @@ export default function Home() {
     setCountInput("");
     setNewProductName("");
     setNewProductCategoryId("");
+    setNewProductLocation("");
     setToast({ tone: "ok", text: "Entry saved." });
     await loadAll(selectedSessionId);
   }
@@ -863,11 +871,13 @@ export default function Home() {
     const draft = inline
       ? {
           code: normalisedCode,
+          location: newProductLocation,
           name: newProductName,
           category_id: newProductCategoryId,
         }
       : {
           code: normaliseProductCode(catalogueDraft.code),
+          location: catalogueDraft.location,
           name: catalogueDraft.name,
           category_id: catalogueDraft.category_id,
         };
@@ -877,6 +887,7 @@ export default function Home() {
     }
     const { error } = await supabase.from("products").insert({
       code: draft.code,
+      location: draft.location.trim() || null,
       name: draft.name.trim(),
       category_id: draft.category_id,
       user_id: user.id,
@@ -887,7 +898,8 @@ export default function Home() {
     }
     setNewProductName("");
     setNewProductCategoryId("");
-    setCatalogueDraft({ code: "", name: "", category_id: "" });
+    setNewProductLocation("");
+    setCatalogueDraft({ code: "", location: "", name: "", category_id: "" });
     setToast({ tone: "ok", text: "Product added." });
     await loadAll(selectedSessionId);
   }
@@ -931,11 +943,13 @@ export default function Home() {
               <th>Product Code</th>
               <th>Product Name</th>
               <th>Category</th>
+              <th>Location</th>
             </tr>
             <tr>
               <td>CODE-0001</td>
               <td>Sample Product Name</td>
               <td>Sample Category</td>
+              <td>Sample Location</td>
             </tr>
           </table>
         </body>
@@ -958,7 +972,7 @@ export default function Home() {
       if (rows.length === 0) {
         setToast({
           tone: "error",
-          text: "No catalogue rows found. Keep headings: Product Code, Product Name, Category.",
+          text: "No catalogue rows found. Keep headings: Product Code, Product Name, Category, Location.",
         });
         return;
       }
@@ -1005,13 +1019,18 @@ export default function Home() {
         if (existingProduct) {
           const { error } = await supabase
             .from("products")
-            .update({ name: row.name, category_id: category.id })
+            .update({
+              name: row.name,
+              category_id: category.id,
+              location: row.location || null,
+            })
             .eq("id", existingProduct.id)
             .eq("user_id", user.id);
           if (error) throw error;
         } else {
           const { error } = await supabase.from("products").insert({
             code: row.code,
+            location: row.location || null,
             name: row.name,
             category_id: category.id,
             user_id: user.id,
@@ -1326,9 +1345,11 @@ export default function Home() {
                   matchedProduct={matchedProduct}
                   normalisedCode={normalisedCode}
                   newProductCategoryId={newProductCategoryId}
+                  newProductLocation={newProductLocation}
                   newProductName={newProductName}
                   onAddProduct={(event) => addProduct(event, true)}
                   onCategoryChange={setNewProductCategoryId}
+                  onLocationChange={setNewProductLocation}
                   onNameChange={setNewProductName}
                 />
               </section>
@@ -1654,18 +1675,22 @@ function ProductLookup({
   matchedProduct,
   normalisedCode,
   newProductCategoryId,
+  newProductLocation,
   newProductName,
   onAddProduct,
   onCategoryChange,
+  onLocationChange,
   onNameChange,
 }: {
   categories: Category[];
   matchedProduct: Product | null;
   normalisedCode: string;
   newProductCategoryId: string;
+  newProductLocation: string;
   newProductName: string;
   onAddProduct: (event: FormEvent) => void;
   onCategoryChange: (value: string) => void;
+  onLocationChange: (value: string) => void;
   onNameChange: (value: string) => void;
 }) {
   if (!normalisedCode) {
@@ -1678,6 +1703,9 @@ function ProductLookup({
         <p className="font-black text-emerald-950">{matchedProduct.name}</p>
         <p className="text-sm text-emerald-800">
           {matchedProduct.code} · {matchedProduct.categories?.name ?? "Uncategorised"}
+        </p>
+        <p className="mt-1 text-sm font-semibold text-emerald-800">
+          Location: {matchedProduct.location || "Not set"}
         </p>
       </div>
     );
@@ -1695,6 +1723,12 @@ function ProductLookup({
           placeholder="Product name"
           value={newProductName}
           onChange={(event) => onNameChange(event.target.value)}
+        />
+        <input
+          className="rounded border border-amber-300 px-3 py-2"
+          placeholder="Location"
+          value={newProductLocation}
+          onChange={(event) => onLocationChange(event.target.value)}
         />
         <select
           className="rounded border border-amber-300 px-3 py-2"
@@ -1764,6 +1798,9 @@ function EntryList({
                     {entry.products?.categories?.name ?? "Uncategorised"}
                     {isAnomaly ? " · Count anomaly" : ""}
                   </p>
+                  <p className="text-sm text-stone-600">
+                    Location: {entry.products?.location || "Not set"}
+                  </p>
                   <p className="mt-1 text-xs font-semibold text-stone-500">
                     Saved {formatDateTime(entry.created_at)}
                   </p>
@@ -1829,6 +1866,7 @@ function Report({
     group.rows.map((entry) => ({
       category,
       code: entry.products?.code ?? "",
+      location: entry.products?.location ?? "",
       name: entry.products?.name ?? "",
       count: entry.count,
       savedAt: formatDateTime(entry.created_at),
@@ -1840,11 +1878,12 @@ function Report({
       ["Session", sessionName],
       ["Generated", generatedStamp],
       [],
-      ["Category", "Product Code", "Product Name", "Count", "Saved At"],
+      ["Category", "Product Code", "Product Name", "Location", "Count", "Saved At"],
       ...rowData.map((row) => [
         row.category,
         row.code,
         row.name,
+        row.location,
         String(row.count),
         row.savedAt,
       ]),
@@ -1867,6 +1906,7 @@ function Report({
             <td>${htmlCell(row.category)}</td>
             <td>${htmlCell(row.code)}</td>
             <td>${htmlCell(row.name)}</td>
+            <td>${htmlCell(row.location || "Not set")}</td>
             <td>${htmlCell(row.count)}</td>
             <td>${htmlCell(row.savedAt)}</td>
           </tr>`,
@@ -1877,20 +1917,21 @@ function Report({
         <head><meta charset="utf-8" /></head>
         <body>
           <table>
-            <tr><th colspan="5">Skya Stocktake Report</th></tr>
-            <tr><td>Session</td><td colspan="4">${htmlCell(sessionName)}</td></tr>
-            <tr><td>Generated</td><td colspan="4">${htmlCell(generatedStamp)}</td></tr>
+            <tr><th colspan="6">Skya Stocktake Report</th></tr>
+            <tr><td>Session</td><td colspan="5">${htmlCell(sessionName)}</td></tr>
+            <tr><td>Generated</td><td colspan="5">${htmlCell(generatedStamp)}</td></tr>
             <tr></tr>
             <tr>
               <th>Category</th>
               <th>Product Code</th>
               <th>Product Name</th>
+              <th>Location</th>
               <th>Count</th>
               <th>Saved At</th>
             </tr>
             ${bodyRows}
             <tr></tr>
-            <tr><td>Total Units</td><td colspan="4">${htmlCell(totalUnits)}</td></tr>
+            <tr><td>Total Units</td><td colspan="5">${htmlCell(totalUnits)}</td></tr>
           </table>
         </body>
       </html>`;
@@ -1913,6 +1954,7 @@ function Report({
                 <tr>
                   <th>Product Code</th>
                   <th>Product Name</th>
+                  <th>Location</th>
                   <th>Count</th>
                   <th>Saved At</th>
                 </tr>
@@ -1924,6 +1966,7 @@ function Report({
                       <tr>
                         <td>${htmlCell(entry.products?.code ?? "")}</td>
                         <td>${htmlCell(entry.products?.name ?? "")}</td>
+                        <td>${htmlCell(entry.products?.location || "Not set")}</td>
                         <td>${htmlCell(entry.count)}</td>
                         <td>${htmlCell(formatDateTime(entry.created_at))}</td>
                       </tr>`,
@@ -1949,7 +1992,7 @@ function Report({
             table { border-collapse: collapse; width: 100%; }
             th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
             th { background: #f0f0f0; }
-            td:nth-child(3), th:nth-child(3) { text-align: right; }
+            td:nth-child(4), th:nth-child(4) { text-align: right; }
             .total { font-size: 16px; font-weight: 700; margin-top: 16px; text-align: right; }
           </style>
         </head>
@@ -2036,7 +2079,7 @@ function Report({
             <div className="divide-y divide-stone-200">
               {group.rows.map((entry) => (
                 <div
-                  className="grid grid-cols-[90px_1fr_70px] gap-2 px-3 py-2 text-sm"
+                  className="grid grid-cols-[90px_1fr_100px_70px] gap-2 px-3 py-2 text-sm"
                   key={entry.id}
                 >
                   <span className="font-black">{entry.products?.code}</span>
@@ -2045,6 +2088,9 @@ function Report({
                     <span className="block text-xs font-semibold text-stone-500">
                       Saved {formatDateTime(entry.created_at)}
                     </span>
+                  </span>
+                  <span className="font-semibold text-stone-600">
+                    {entry.products?.location || "Not set"}
                   </span>
                   <span className="text-right font-black">{entry.count}</span>
                 </div>
@@ -2074,7 +2120,7 @@ function Catalogue({
   onUpdateProduct,
   onWipeAllData,
 }: {
-  catalogueDraft: { code: string; name: string; category_id: string };
+  catalogueDraft: { code: string; location: string; name: string; category_id: string };
   categories: Category[];
   categoryName: string;
   importInputRef: RefObject<HTMLInputElement | null>;
@@ -2083,7 +2129,12 @@ function Catalogue({
   onAddProduct: (event: FormEvent) => void;
   onCategoryName: (value: string) => void;
   onDownloadTemplate: () => void;
-  onDraft: (value: { code: string; name: string; category_id: string }) => void;
+  onDraft: (value: {
+    code: string;
+    location: string;
+    name: string;
+    category_id: string;
+  }) => void;
   onImportClick: () => void;
   onImportTemplate: (event: ChangeEvent<HTMLInputElement>) => void;
   onRenameCategory: (category: Category, name: string) => void;
@@ -2097,7 +2148,7 @@ function Catalogue({
           <div>
             <h2 className="text-xl font-black text-stone-950">Product Catalogue</h2>
             <p className="mt-1 text-sm text-stone-600">
-              Import columns: Product Code, Product Name, Category.
+              Import columns: Product Code, Product Name, Category, Location.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -2131,7 +2182,7 @@ function Catalogue({
             type="file"
           />
         </div>
-        <form className="mt-4 grid gap-2 md:grid-cols-[140px_1fr_190px_auto]" onSubmit={onAddProduct}>
+        <form className="mt-4 grid gap-2 md:grid-cols-[140px_1fr_190px_160px_auto]" onSubmit={onAddProduct}>
           <input
             className="rounded border border-stone-300 px-3 py-2 uppercase"
             placeholder="Code"
@@ -2156,13 +2207,19 @@ function Catalogue({
               </option>
             ))}
           </select>
+          <input
+            className="rounded border border-stone-300 px-3 py-2"
+            placeholder="Location"
+            value={catalogueDraft.location}
+            onChange={(event) => onDraft({ ...catalogueDraft, location: event.target.value })}
+          />
           <button className="rounded bg-emerald-800 px-3 py-2 font-black text-white">
             Add
           </button>
         </form>
         <div className="mt-4 divide-y divide-stone-200 rounded border border-stone-200">
           {products.map((product) => (
-            <div className="grid gap-2 p-3 md:grid-cols-[120px_1fr_190px]" key={product.id}>
+            <div className="grid gap-2 p-3 md:grid-cols-[120px_1fr_190px_160px]" key={product.id}>
               <input
                 className="rounded border border-stone-300 px-2 py-2 font-bold uppercase"
                 defaultValue={product.code}
@@ -2189,6 +2246,14 @@ function Catalogue({
                   </option>
                 ))}
               </select>
+              <input
+                className="rounded border border-stone-300 px-2 py-2"
+                defaultValue={product.location ?? ""}
+                onBlur={(event) =>
+                  onUpdateProduct(product, { location: event.target.value.trim() || null })
+                }
+                placeholder="Location"
+              />
             </div>
           ))}
         </div>
