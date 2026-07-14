@@ -36,6 +36,7 @@ type CatalogueImportRow = {
   code: string;
   name: string;
 };
+type UserProfile = { username: string; email: string };
 type NavMode = "count" | "report" | "catalogue";
 type NavIconProps = { className?: string };
 type NavItem = {
@@ -137,6 +138,21 @@ function normaliseUsername(value: string) {
   return value.trim().toLowerCase();
 }
 
+function authCallbackMessage(message: string) {
+  if (message.toLowerCase().includes("pkce code verifier")) {
+    return "That confirmation link was already used or opened in another browser. If you are signed in, you can continue.";
+  }
+
+  return message;
+}
+
+function cleanAuthCallbackUrl() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("code");
+  url.searchParams.delete("auth_error");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
 function parseCsvRows(text: string) {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -211,6 +227,7 @@ export default function Home() {
   const supabase = useMemo(() => (supabaseConfigured ? createClient() : null), []);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authMode, setAuthMode] = useState<"sign-in" | "sign-up">("sign-in");
   const [authEmail, setAuthEmail] = useState("");
@@ -370,6 +387,7 @@ export default function Home() {
     if (!supabase) return;
     await supabase.auth.signOut();
     setUser(null);
+    setUserProfile(null);
     setSessions([]);
     setSelectedSessionId("");
     setCategories([]);
@@ -438,32 +456,45 @@ export default function Home() {
       return;
     }
 
-    const code = new URLSearchParams(window.location.search).get("code");
-    const authError = new URLSearchParams(window.location.search).get("auth_error");
-    if (authError) {
-      setToast({ tone: "error", text: authError });
-      window.history.replaceState({}, "", window.location.pathname);
-    }
-
-    if (code) {
-      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
-        window.history.replaceState({}, "", window.location.pathname);
-        if (error) setToast({ tone: "error", text: error.message });
-      });
-    }
-
+    const supabaseClient = supabase;
     let mounted = true;
-    supabase.auth.getUser().then(({ data }) => {
+    async function initialiseAuth() {
+      const searchParams = new URLSearchParams(window.location.search);
+      const code = searchParams.get("code");
+      const authError = searchParams.get("auth_error");
+      let callbackError = authError ? authCallbackMessage(authError) : "";
+
+      if (code) {
+        const { error } = await supabaseClient.auth.exchangeCodeForSession(code);
+        if (error) {
+          callbackError = authCallbackMessage(error.message);
+        }
+      }
+
+      if (code || authError) {
+        cleanAuthCallbackUrl();
+      }
+
+      const { data } = await supabaseClient.auth.getUser();
       if (!mounted) return;
       setUser(data.user);
       setAuthLoading(false);
       if (!data.user) setLoading(false);
-    });
+      if (callbackError) {
+        setToast({
+          tone: data.user ? "ok" : "error",
+          text: data.user ? "Signed in. You can continue." : callbackError,
+        });
+      }
+    }
+
+    initialiseAuth();
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       if (!session?.user) {
+        setUserProfile(null);
         setSessions([]);
         setSelectedSessionId("");
         setCategories([]);
@@ -482,6 +513,32 @@ export default function Home() {
     if (user) loadAll("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadUserProfile() {
+      if (!supabase || !user) {
+        setUserProfile(null);
+        return;
+      }
+
+      const { data } = await supabase
+        .from("user_profiles")
+        .select("username,email")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (mounted) {
+        setUserProfile((data as UserProfile | null) ?? null);
+      }
+    }
+
+    loadUserProfile();
+    return () => {
+      mounted = false;
+    };
+  }, [supabase, user]);
 
   useEffect(() => {
     if (selectedSessionId) loadEntries(selectedSessionId);
@@ -862,6 +919,10 @@ export default function Home() {
       ? `${entries.length} saved ${entries.length === 1 ? "entry" : "entries"}`
       : "Sign in required"
     : "Supabase env required";
+  const displayUsername =
+    userProfile?.username ||
+    normaliseUsername(String(user?.user_metadata?.username ?? "")) ||
+    (user ? `user_${user.id.slice(0, 8)}` : "");
 
   function selectNavigationMode(nextMode: NavMode) {
     setMode(nextMode);
@@ -918,15 +979,12 @@ export default function Home() {
                 <p className="text-xs font-bold uppercase tracking-[0.22em] text-emerald-800">
                   Skya Stocktake
                 </p>
-                <h1 className="mt-1 text-3xl font-black text-stone-950 sm:text-4xl">
-                  Count stock. See the report now.
-                </h1>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {user?.email && (
+              {user && (
                 <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
-                  {user.email}
+                  {displayUsername}
                 </span>
               )}
               <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
