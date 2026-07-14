@@ -1230,6 +1230,11 @@ export default function Home() {
                 <h2 className="text-xl font-black text-stone-950">
                   {selectedSession?.name ?? "Select a session"}
                 </h2>
+                {!selectedSessionId && (
+                  <p className="mt-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
+                    Add or select a session before saving a count.
+                  </p>
+                )}
                 <form className="mt-4 grid gap-3 lg:grid-cols-[minmax(180px,1fr)_160px_auto]" onSubmit={saveEntry}>
                   <div>
                     <label className="text-xs font-bold uppercase text-stone-600">Product code</label>
@@ -1273,7 +1278,7 @@ export default function Home() {
                     className="rounded bg-emerald-800 px-5 py-3 font-black text-white lg:self-end"
                     disabled={!selectedSessionId || saving}
                   >
-                    {saving ? "Saving" : "Save"}
+                    {saving ? "Saving" : selectedSessionId ? "Save" : "Select session first"}
                   </button>
                 </form>
 
