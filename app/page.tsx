@@ -45,6 +45,13 @@ type NavItem = {
   description: string;
   icon: (props: NavIconProps) => ReactNode;
 };
+type SpreadsheetRow = string[];
+type ZipEntry = {
+  compressedSize: number;
+  compressionMethod: number;
+  localHeaderOffset: number;
+  name: string;
+};
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -154,8 +161,8 @@ function cleanAuthCallbackUrl() {
 }
 
 function parseCsvRows(text: string) {
-  const rows: string[][] = [];
-  let row: string[] = [];
+  const rows: SpreadsheetRow[] = [];
+  let row: SpreadsheetRow = [];
   let cell = "";
   let inQuotes = false;
 
@@ -187,20 +194,7 @@ function parseCsvRows(text: string) {
   return rows;
 }
 
-function parseCatalogueImport(text: string): CatalogueImportRow[] {
-  const trimmed = text.trim();
-  const rows = trimmed.includes("<table")
-    ? Array.from(
-        new DOMParser()
-          .parseFromString(trimmed, "text/html")
-          .querySelectorAll("tr"),
-      ).map((row) =>
-        Array.from(row.querySelectorAll("th,td")).map((cell) =>
-          cell.textContent?.trim() ?? "",
-        ),
-      )
-    : parseCsvRows(trimmed);
-
+function parseCatalogueRows(rows: SpreadsheetRow[]): CatalogueImportRow[] {
   const headerIndex = rows.findIndex((row) =>
     row.map((cell) => cell.toLowerCase()).includes("product code"),
   );
@@ -219,8 +213,167 @@ function parseCatalogueImport(text: string): CatalogueImportRow[] {
           row.category === "Sample Category" &&
           row.code === "CODE-0001" &&
           row.name === "Sample Product Name"
-        ),
+      ),
     );
+}
+
+function parseCatalogueImport(text: string): CatalogueImportRow[] {
+  const trimmed = text.trim();
+  const rows = trimmed.includes("<table")
+    ? Array.from(
+        new DOMParser()
+          .parseFromString(trimmed, "text/html")
+          .querySelectorAll("tr"),
+      ).map((row) =>
+        Array.from(row.querySelectorAll("th,td")).map((cell) =>
+          cell.textContent?.trim() ?? "",
+        ),
+      )
+    : parseCsvRows(trimmed);
+
+  return parseCatalogueRows(rows);
+}
+
+function readUint16(view: DataView, offset: number) {
+  return view.getUint16(offset, true);
+}
+
+function readUint32(view: DataView, offset: number) {
+  return view.getUint32(offset, true);
+}
+
+function findEndOfCentralDirectory(view: DataView) {
+  const minOffset = Math.max(0, view.byteLength - 66000);
+  for (let offset = view.byteLength - 22; offset >= minOffset; offset -= 1) {
+    if (readUint32(view, offset) === 0x06054b50) return offset;
+  }
+  throw new Error("Could not read the Excel workbook.");
+}
+
+function readZipEntries(view: DataView, bytes: Uint8Array) {
+  const decoder = new TextDecoder();
+  const endOffset = findEndOfCentralDirectory(view);
+  const entryCount = readUint16(view, endOffset + 10);
+  let offset = readUint32(view, endOffset + 16);
+  const entries: ZipEntry[] = [];
+
+  for (let index = 0; index < entryCount; index += 1) {
+    if (readUint32(view, offset) !== 0x02014b50) break;
+    const compressionMethod = readUint16(view, offset + 10);
+    const compressedSize = readUint32(view, offset + 20);
+    const nameLength = readUint16(view, offset + 28);
+    const extraLength = readUint16(view, offset + 30);
+    const commentLength = readUint16(view, offset + 32);
+    const localHeaderOffset = readUint32(view, offset + 42);
+    const name = decoder.decode(bytes.slice(offset + 46, offset + 46 + nameLength));
+
+    entries.push({ compressedSize, compressionMethod, localHeaderOffset, name });
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+
+  return entries;
+}
+
+async function readZipEntryText(
+  view: DataView,
+  bytes: Uint8Array,
+  entry: ZipEntry,
+) {
+  const localOffset = entry.localHeaderOffset;
+  if (readUint32(view, localOffset) !== 0x04034b50) {
+    throw new Error("Could not read the Excel workbook.");
+  }
+
+  const localNameLength = readUint16(view, localOffset + 26);
+  const localExtraLength = readUint16(view, localOffset + 28);
+  const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+  const compressed = bytes.slice(dataStart, dataStart + entry.compressedSize);
+
+  if (entry.compressionMethod === 0) {
+    return new TextDecoder().decode(compressed);
+  }
+
+  if (entry.compressionMethod !== 8 || typeof DecompressionStream === "undefined") {
+    throw new Error("This Excel file uses an unsupported compression format.");
+  }
+
+  const stream = new Blob([compressed])
+    .stream()
+    .pipeThrough(new DecompressionStream("deflate-raw"));
+  return new TextDecoder().decode(await new Response(stream).arrayBuffer());
+}
+
+function cellColumnIndex(reference: string) {
+  const letters = reference.match(/^[A-Z]+/i)?.[0] ?? "";
+  return [...letters.toUpperCase()].reduce(
+    (total, letter) => total * 26 + letter.charCodeAt(0) - 64,
+    0,
+  ) - 1;
+}
+
+function textFromXmlElement(element: Element | null) {
+  return element?.textContent?.trim() ?? "";
+}
+
+function parseXlsxRows(sheetXml: string, sharedStringsXml = "") {
+  const parser = new DOMParser();
+  const sharedStrings = sharedStringsXml
+    ? Array.from(
+        parser.parseFromString(sharedStringsXml, "application/xml").querySelectorAll("si"),
+      ).map((item) =>
+        Array.from(item.querySelectorAll("t"))
+          .map((node) => node.textContent ?? "")
+          .join("")
+          .trim(),
+      )
+    : [];
+  const sheet = parser.parseFromString(sheetXml, "application/xml");
+
+  return Array.from(sheet.querySelectorAll("sheetData row")).map((row) => {
+    const cells: SpreadsheetRow = [];
+    for (const cell of Array.from(row.querySelectorAll("c"))) {
+      const reference = cell.getAttribute("r") ?? "";
+      const index = Math.max(cellColumnIndex(reference), cells.length);
+      const type = cell.getAttribute("t");
+      const rawValue =
+        type === "inlineStr"
+          ? textFromXmlElement(cell.querySelector("is t"))
+          : textFromXmlElement(cell.querySelector("v"));
+      cells[index] =
+        type === "s" ? sharedStrings[Number(rawValue)] ?? "" : rawValue;
+    }
+    return cells.map((value) => value?.trim() ?? "");
+  });
+}
+
+async function parseXlsxCatalogueImport(file: File) {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  const entries = readZipEntries(view, bytes);
+  const entryByName = new Map(entries.map((entry) => [entry.name, entry]));
+  const firstWorksheet = entries.find((entry) =>
+    /^xl\/worksheets\/sheet\d+\.xml$/i.test(entry.name),
+  );
+
+  if (!firstWorksheet) throw new Error("No worksheet found.");
+
+  const [sheetXml, sharedStringsXml] = await Promise.all([
+    readZipEntryText(view, bytes, firstWorksheet),
+    entryByName.has("xl/sharedStrings.xml")
+      ? readZipEntryText(view, bytes, entryByName.get("xl/sharedStrings.xml")!)
+      : Promise.resolve(""),
+  ]);
+
+  return parseCatalogueRows(parseXlsxRows(sheetXml, sharedStringsXml));
+}
+
+async function parseCatalogueImportFile(file: File) {
+  if (file.name.toLowerCase().endsWith(".xlsx")) {
+    return parseXlsxCatalogueImport(file);
+  }
+
+  return parseCatalogueImport(await file.text());
 }
 
 export default function Home() {
@@ -778,16 +931,8 @@ export default function Home() {
     event.target.value = "";
     if (!file || !supabase || !user) return;
 
-    if (file.name.toLowerCase().endsWith(".xlsx")) {
-      setToast({
-        tone: "error",
-        text: "Please save the filled template as .xls or .csv, then import it.",
-      });
-      return;
-    }
-
     try {
-      const rows = parseCatalogueImport(await file.text());
+      const rows = await parseCatalogueImportFile(file);
       if (rows.length === 0) {
         setToast({
           tone: "error",
@@ -1935,7 +2080,7 @@ function Catalogue({
             </button>
           </div>
           <input
-            accept=".xls,.csv,text/csv,application/vnd.ms-excel"
+            accept=".xlsx,.xls,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
             className="hidden"
             onChange={onImportTemplate}
             ref={importInputRef}
