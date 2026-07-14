@@ -1105,7 +1105,7 @@ export default function Home() {
       )}
 
       <div className={user ? "lg:pl-72" : undefined}>
-        <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-4 px-4 py-5 sm:px-6">
+        <main className="mx-auto flex min-h-screen w-full max-w-[112rem] flex-col gap-4 px-4 py-5 sm:px-6">
           <header className="flex flex-col gap-3 border-b border-stone-300 pb-4 sm:flex-row sm:items-end sm:justify-between">
             <div className="flex items-start gap-3">
               {user && (
@@ -1185,7 +1185,7 @@ export default function Home() {
           onUsername={setAuthUsername}
         />
       ) : (
-      <section className="grid gap-4 lg:grid-cols-[300px_1fr]">
+      <section className="grid gap-4 2xl:grid-cols-[300px_1fr]">
         <aside className="space-y-4">
           <div className="rounded border border-stone-300 bg-white p-3">
             <h2 className="text-sm font-black uppercase text-stone-800">Sessions</h2>
@@ -1225,12 +1225,12 @@ export default function Home() {
 
         <section className="space-y-4">
           {mode === "count" && (
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_420px]">
               <section className="rounded border border-stone-300 bg-white p-4">
                 <h2 className="text-xl font-black text-stone-950">
                   {selectedSession?.name ?? "Select a session"}
                 </h2>
-                <form className="mt-4 grid gap-3 sm:grid-cols-[1fr_130px_auto]" onSubmit={saveEntry}>
+                <form className="mt-4 grid gap-3 lg:grid-cols-[minmax(180px,1fr)_160px_auto]" onSubmit={saveEntry}>
                   <div>
                     <label className="text-xs font-bold uppercase text-stone-600">Product code</label>
                     <input
@@ -1270,7 +1270,7 @@ export default function Home() {
                     />
                   </div>
                   <button
-                    className="self-end rounded bg-emerald-800 px-5 py-3 font-black text-white"
+                    className="rounded bg-emerald-800 px-5 py-3 font-black text-white lg:self-end"
                     disabled={!selectedSessionId || saving}
                   >
                     {saving ? "Saving" : "Save"}
