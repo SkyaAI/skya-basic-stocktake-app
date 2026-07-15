@@ -55,7 +55,7 @@ type UserProfile = {
   default_organisation_id: string | null;
   display_name?: string | null;
 };
-type NavMode = "count" | "report" | "catalogue";
+type NavMode = "count" | "report" | "catalogue" | "organisation";
 type NavIconProps = { className?: string };
 type NavItem = {
   id: NavMode;
@@ -96,6 +96,12 @@ const NAV_ITEMS: NavItem[] = [
     label: "Catalogue",
     description: "Manage products",
     icon: BoxesIcon,
+  },
+  {
+    id: "organisation",
+    label: "Organisation",
+    description: "Manage access",
+    icon: BuildingIcon,
   },
 ];
 const SESSION_PRESETS = [
@@ -784,6 +790,12 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSessionId]);
 
+  useEffect(() => {
+    if (mode === "organisation" && !canManageMembers) {
+      setMode("count");
+    }
+  }, [canManageMembers, mode]);
+
   async function createNamedSession(name: string) {
     const sessionName = name.trim();
     if (!supabase || !user || !activeOrganisationId || !sessionName) return;
@@ -1243,13 +1255,6 @@ export default function Home() {
     });
   }
 
-  const statusText = supabaseConfigured
-    ? user
-      ? activeOrganisation
-        ? `${entries.length} saved ${entries.length === 1 ? "entry" : "entries"}`
-        : "No organisation access"
-      : "Sign in required"
-    : "Supabase env required";
   const displayUsername =
     userProfile?.display_name ||
     userProfile?.username ||
@@ -1266,6 +1271,7 @@ export default function Home() {
       {user && (
         <NavigationMenu
           activeMode={mode}
+          canManageOrganisation={canManageMembers}
           onSelect={selectNavigationMode}
           variant="desktop"
         />
@@ -1284,14 +1290,15 @@ export default function Home() {
           />
           <NavigationMenu
             activeMode={mode}
+            canManageOrganisation={canManageMembers}
             displayUsername={displayUsername}
+            organisationName={activeOrganisation?.name}
             onClose={() => setMobileNavOpen(false)}
             onSelect={selectNavigationMode}
             onSignOut={() => {
               setMobileNavOpen(false);
               signOut();
             }}
-            statusText={statusText}
             variant="mobile"
           />
         </div>
@@ -1317,41 +1324,19 @@ export default function Home() {
                 <p className="text-xs font-bold uppercase tracking-[0.22em] text-emerald-800">
                   Skya Stocktake
                 </p>
+                {user && activeOrganisation && (
+                  <p className="mt-1 text-xs font-semibold text-stone-600 lg:hidden">
+                    {displayUsername} · {activeOrganisation.name}
+                  </p>
+                )}
               </div>
             </div>
             <div className="hidden flex-wrap items-center gap-2 lg:flex">
-              {user && organisations.length > 1 && (
-                <select
-                  aria-label="Select organisation"
-                  className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
-                  onChange={(event) => setActiveOrganisationId(event.target.value)}
-                  value={activeOrganisationId}
-                >
-                  {organisations.map((organisation) => (
-                    <option key={organisation.id} value={organisation.id}>
-                      {organisation.name}
-                    </option>
-                  ))}
-                </select>
-              )}
-              {user && activeOrganisation && organisations.length <= 1 && (
-                <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
-                  {activeOrganisation.name}
-                </span>
-              )}
-              {user && activeRole && (
-                <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold capitalize text-stone-700">
-                  {activeRole.replace("_", " ")}
-                </span>
-              )}
               {user && (
                 <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
                   {displayUsername}
                 </span>
               )}
-              <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
-                {statusText}
-              </span>
               {user && (
                 <button
                   className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-black text-stone-800 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
@@ -1459,53 +1444,6 @@ export default function Home() {
                   <span className="text-xs uppercase text-stone-500">{session.status}</span>
                 </button>
               ))}
-            </div>
-          </div>
-          <div className="rounded border border-stone-300 bg-white p-3">
-            <h2 className="text-sm font-black uppercase text-stone-800">Organisation</h2>
-            <p className="mt-2 font-black text-stone-950">{activeOrganisation.name}</p>
-            <p className="text-xs font-semibold capitalize text-stone-500">
-              Your role: {activeRole?.replace("_", " ") ?? "member"}
-            </p>
-            {canManageMembers && (
-              <form className="mt-3 grid gap-2" onSubmit={addOrganisationMember}>
-                <input
-                  className="rounded border border-stone-300 px-3 py-2 text-sm"
-                  placeholder="member@email.com"
-                  type="email"
-                  value={memberEmail}
-                  onChange={(event) => setMemberEmail(event.target.value)}
-                />
-                <select
-                  className="rounded border border-stone-300 px-3 py-2 text-sm"
-                  value={memberRole}
-                  onChange={(event) => setMemberRole(event.target.value as OrganisationRole)}
-                >
-                  <option value="warehouse_staff">Warehouse staff</option>
-                  <option value="supervisor">Supervisor</option>
-                  <option value="admin">Admin</option>
-                </select>
-                <button className="rounded bg-emerald-800 px-3 py-2 text-sm font-bold text-white">
-                  Add Member
-                </button>
-              </form>
-            )}
-            <div className="mt-3 space-y-2">
-              {organisationMembers
-                .filter((member) => member.organisation_id === activeOrganisationId)
-                .map((member) => (
-                  <div
-                    className="rounded border border-stone-200 bg-stone-50 px-3 py-2 text-xs"
-                    key={member.id}
-                  >
-                    <p className="font-bold text-stone-900">
-                      {member.invited_email || member.user_id || "Member"}
-                    </p>
-                    <p className="capitalize text-stone-500">
-                      {member.role.replace("_", " ")} · {member.status}
-                    </p>
-                  </div>
-                ))}
             </div>
           </div>
         </aside>
@@ -1688,6 +1626,23 @@ export default function Home() {
               importInputRef={importInputRef}
             />
           )}
+
+          {mode === "organisation" && (
+            <OrganisationPanel
+              activeOrganisation={activeOrganisation}
+              activeOrganisationId={activeOrganisationId}
+              activeRole={activeRole}
+              canManageMembers={canManageMembers}
+              memberEmail={memberEmail}
+              memberRole={memberRole}
+              members={organisationMembers}
+              organisations={organisations}
+              onAddMember={addOrganisationMember}
+              onMemberEmail={setMemberEmail}
+              onMemberRole={setMemberRole}
+              onOrganisationChange={setActiveOrganisationId}
+            />
+          )}
         </section>
       </section>
       )}
@@ -1699,22 +1654,27 @@ export default function Home() {
 
 function NavigationMenu({
   activeMode,
+  canManageOrganisation,
   displayUsername,
+  organisationName,
   onClose,
   onSelect,
   onSignOut,
-  statusText,
   variant,
 }: {
   activeMode: NavMode;
+  canManageOrganisation: boolean;
   displayUsername?: string;
+  organisationName?: string;
   onClose?: () => void;
   onSelect: (mode: NavMode) => void;
   onSignOut?: () => void;
-  statusText?: string;
   variant: "desktop" | "mobile";
 }) {
   const isMobile = variant === "mobile";
+  const visibleItems = NAV_ITEMS.filter(
+    (item) => item.id !== "organisation" || (!isMobile && canManageOrganisation),
+  );
 
   return (
     <aside
@@ -1744,7 +1704,7 @@ function NavigationMenu({
         )}
       </div>
       <nav aria-label="Stocktake sections" className="flex-1 space-y-2 p-4">
-        {NAV_ITEMS.map((item) => {
+        {visibleItems.map((item) => {
           const Icon = item.icon;
           const active = activeMode === item.id;
 
@@ -1786,8 +1746,8 @@ function NavigationMenu({
             <p className="mt-1 text-base font-black text-stone-950">
               {displayUsername}
             </p>
-            {statusText && (
-              <p className="mt-1 text-sm font-semibold text-stone-600">{statusText}</p>
+            {organisationName && (
+              <p className="mt-1 text-sm font-semibold text-stone-600">{organisationName}</p>
             )}
           </div>
           <button
@@ -1885,6 +1845,24 @@ function BoxesIcon({ className }: NavIconProps) {
     >
       <path d="m12 3 7 4-7 4-7-4 7-4Z" />
       <path d="m5 12 7 4 7-4M5 17l7 4 7-4" />
+    </svg>
+  );
+}
+
+function BuildingIcon({ className }: NavIconProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      <path d="M4 21h16M6 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16" />
+      <path d="M9 7h1M14 7h1M9 11h1M14 11h1M9 15h1M14 15h1" />
     </svg>
   );
 }
@@ -2147,6 +2125,116 @@ function EntryList({
             </div>
           );
         })}
+      </div>
+    </section>
+  );
+}
+
+function OrganisationPanel({
+  activeOrganisation,
+  activeOrganisationId,
+  activeRole,
+  canManageMembers,
+  memberEmail,
+  memberRole,
+  members,
+  organisations,
+  onAddMember,
+  onMemberEmail,
+  onMemberRole,
+  onOrganisationChange,
+}: {
+  activeOrganisation: Organisation;
+  activeOrganisationId: string;
+  activeRole: OrganisationRole | null;
+  canManageMembers: boolean;
+  memberEmail: string;
+  memberRole: OrganisationRole;
+  members: OrganisationMember[];
+  organisations: Organisation[];
+  onAddMember: (event: FormEvent) => void;
+  onMemberEmail: (value: string) => void;
+  onMemberRole: (value: OrganisationRole) => void;
+  onOrganisationChange: (value: string) => void;
+}) {
+  const activeMembers = members.filter(
+    (member) => member.organisation_id === activeOrganisationId,
+  );
+
+  return (
+    <section className="rounded border border-stone-300 bg-white p-4">
+      <div className="border-b border-stone-200 pb-4">
+        <h2 className="text-2xl font-black text-stone-950">Organisation</h2>
+        <p className="mt-1 text-sm font-semibold text-stone-600">
+          {activeOrganisation.name} · Your role:{" "}
+          <span className="capitalize">{activeRole?.replace("_", " ") ?? "member"}</span>
+        </p>
+      </div>
+
+      {organisations.length > 1 && (
+        <div className="mt-4 max-w-md">
+          <label className="text-xs font-bold uppercase text-stone-600" htmlFor="organisation-switcher">
+            Active organisation
+          </label>
+          <select
+            className="mt-1 w-full rounded border border-stone-300 bg-white px-3 py-3 font-semibold text-stone-900 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+            id="organisation-switcher"
+            onChange={(event) => onOrganisationChange(event.target.value)}
+            value={activeOrganisationId}
+          >
+            {organisations.map((organisation) => (
+              <option key={organisation.id} value={organisation.id}>
+                {organisation.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {!canManageMembers && (
+        <p className="mt-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-900">
+          Organisation settings are managed by office staff. Warehouse staff can continue
+          counting stock from the Count page.
+        </p>
+      )}
+
+      {canManageMembers && (
+        <form className="mt-4 grid gap-2 lg:grid-cols-[minmax(220px,1fr)_220px_auto]" onSubmit={onAddMember}>
+          <input
+            className="rounded border border-stone-300 px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+            placeholder="member@email.com"
+            type="email"
+            value={memberEmail}
+            onChange={(event) => onMemberEmail(event.target.value)}
+          />
+          <select
+            className="rounded border border-stone-300 px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+            value={memberRole}
+            onChange={(event) => onMemberRole(event.target.value as OrganisationRole)}
+          >
+            <option value="warehouse_staff">Warehouse staff</option>
+            <option value="supervisor">Supervisor</option>
+            <option value="admin">Admin</option>
+          </select>
+          <button className="rounded bg-emerald-800 px-4 py-3 text-sm font-black text-white focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2">
+            Add Member
+          </button>
+        </form>
+      )}
+
+      <div className="mt-4 divide-y divide-stone-200 rounded border border-stone-200">
+        {activeMembers.length === 0 && (
+          <p className="p-3 text-sm text-stone-600">No members listed yet.</p>
+        )}
+        {activeMembers.map((member) => (
+          <div className="grid gap-1 p-3 text-sm md:grid-cols-[1fr_160px_120px]" key={member.id}>
+            <p className="font-bold text-stone-950">
+              {member.invited_email || member.user_id || "Member"}
+            </p>
+            <p className="capitalize text-stone-600">{member.role.replace("_", " ")}</p>
+            <p className="uppercase text-stone-500">{member.status}</p>
+          </div>
+        ))}
       </div>
     </section>
   );
