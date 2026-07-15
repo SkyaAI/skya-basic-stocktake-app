@@ -13,19 +13,21 @@ import {
 import type { User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 
-type Category = { id: string; name: string };
+type Category = { id: string; name: string; organisation_id?: string };
 type Product = {
   id: string;
   code: string;
   name: string;
   category_id: string | null;
+  organisation_id?: string;
   categories?: Category | null;
 };
-type Session = { id: string; name: string; status: string; created_at: string };
+type Session = { id: string; name: string; status: string; created_at: string; organisation_id?: string };
 type Entry = {
   id: string;
   session_id: string;
   product_id: string;
+  organisation_id?: string;
   count: number;
   created_at: string;
   location: string | null;
@@ -37,7 +39,22 @@ type CatalogueImportRow = {
   code: string;
   name: string;
 };
-type UserProfile = { username: string; email: string };
+type Organisation = { id: string; name: string };
+type OrganisationRole = "warehouse_staff" | "supervisor" | "admin";
+type OrganisationMember = {
+  id: string;
+  organisation_id: string;
+  user_id: string | null;
+  invited_email: string | null;
+  role: OrganisationRole;
+  status: "pending" | "active" | "disabled";
+};
+type UserProfile = {
+  username: string;
+  email: string;
+  default_organisation_id: string | null;
+  display_name?: string | null;
+};
 type NavMode = "count" | "report" | "catalogue";
 type NavIconProps = { className?: string };
 type NavItem = {
@@ -395,6 +412,11 @@ export default function Home() {
   const [authEmail, setAuthEmail] = useState("");
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [organisations, setOrganisations] = useState<Organisation[]>([]);
+  const [activeOrganisationId, setActiveOrganisationId] = useState("");
+  const [organisationMembers, setOrganisationMembers] = useState<OrganisationMember[]>([]);
+  const [memberEmail, setMemberEmail] = useState("");
+  const [memberRole, setMemberRole] = useState<OrganisationRole>("warehouse_staff");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [categories, setCategories] = useState<Category[]>([]);
@@ -422,6 +444,18 @@ export default function Home() {
   });
 
   const selectedSession = sessions.find((session) => session.id === selectedSessionId);
+  const activeOrganisation = organisations.find(
+    (organisation) => organisation.id === activeOrganisationId,
+  );
+  const activeMember = organisationMembers.find(
+    (member) =>
+      member.organisation_id === activeOrganisationId &&
+      member.user_id === user?.id &&
+      member.status === "active",
+  );
+  const activeRole = activeMember?.role ?? null;
+  const canManageCatalogue = activeRole === "admin";
+  const canManageMembers = activeRole === "admin";
   const normalisedCode = normaliseProductCode(codeInput);
   const matchedProduct =
     products.find((product) => product.code === normalisedCode) ?? null;
@@ -551,6 +585,9 @@ export default function Home() {
     await supabase.auth.signOut();
     setUser(null);
     setUserProfile(null);
+    setOrganisations([]);
+    setActiveOrganisationId("");
+    setOrganisationMembers([]);
     setSessions([]);
     setSelectedSessionId("");
     setCategories([]);
@@ -559,8 +596,65 @@ export default function Home() {
     setToast({ tone: "ok", text: "Signed out." });
   }
 
-  async function loadAll(sessionId = selectedSessionId) {
+  async function loadOrganisationContext() {
     if (!supabase || !user) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    const [profileResult, membershipResult] = await Promise.all([
+      supabase
+        .from("user_profiles")
+        .select("username,email,display_name,default_organisation_id")
+        .eq("id", user.id)
+        .maybeSingle(),
+      supabase
+        .from("organisation_members")
+        .select("*, organisations(id,name)")
+        .eq("status", "active")
+        .order("created_at", { ascending: true }),
+    ]);
+
+    if (profileResult.error || membershipResult.error) {
+      setToast({ tone: "error", text: "Could not load organisation access." });
+      setLoading(false);
+      return;
+    }
+
+    const profile = (profileResult.data as UserProfile | null) ?? null;
+    const memberships = (membershipResult.data ?? []) as (OrganisationMember & {
+      organisations?: Organisation | null;
+    })[];
+    const loadedOrganisations = memberships
+      .map((membership) => membership.organisations)
+      .filter((organisation): organisation is Organisation => Boolean(organisation));
+    const nextOrganisationId =
+      activeOrganisationId ||
+      profile?.default_organisation_id ||
+      loadedOrganisations[0]?.id ||
+      "";
+
+    setUserProfile(profile);
+    setOrganisationMembers(memberships.map(({ organisations: _organisations, ...member }) => member));
+    setOrganisations(loadedOrganisations);
+    setActiveOrganisationId(nextOrganisationId);
+
+    if (!nextOrganisationId) {
+      setSessions([]);
+      setSelectedSessionId("");
+      setCategories([]);
+      setProducts([]);
+      setEntries([]);
+      setLoading(false);
+      return;
+    }
+
+    await loadAll("", nextOrganisationId);
+  }
+
+  async function loadAll(sessionId = selectedSessionId, organisationId = activeOrganisationId) {
+    if (!supabase || !user || !organisationId) {
       setLoading(false);
       return;
     }
@@ -570,13 +664,13 @@ export default function Home() {
       supabase
         .from("stocktake_sessions")
         .select("*")
-        .eq("user_id", user.id)
+        .eq("organisation_id", organisationId)
         .order("created_at", { ascending: false }),
-      supabase.from("categories").select("*").eq("user_id", user.id).order("name"),
+      supabase.from("categories").select("*").eq("organisation_id", organisationId).order("name"),
       supabase
         .from("products")
         .select("*, categories(*)")
-        .eq("user_id", user.id)
+        .eq("organisation_id", organisationId)
         .order("code", { ascending: true }),
     ]);
 
@@ -593,17 +687,17 @@ export default function Home() {
 
     const nextSessionId = sessionId || loadedSessions[0]?.id || "";
     setSelectedSessionId(nextSessionId);
-    if (nextSessionId) await loadEntries(nextSessionId);
+    if (nextSessionId) await loadEntries(nextSessionId, organisationId);
     setLoading(false);
   }
 
-  async function loadEntries(sessionId: string) {
-    if (!supabase || !user || !sessionId) return;
+  async function loadEntries(sessionId: string, organisationId = activeOrganisationId) {
+    if (!supabase || !user || !sessionId || !organisationId) return;
     const { data, error } = await supabase
       .from("stocktake_entries")
       .select("*, products(*, categories(*))")
       .eq("session_id", sessionId)
-      .eq("user_id", user.id)
+      .eq("organisation_id", organisationId)
       .order("created_at", { ascending: false });
     if (error) {
       setToast({ tone: "error", text: "Could not load entries." });
@@ -658,6 +752,9 @@ export default function Home() {
       setUser(session?.user ?? null);
       if (!session?.user) {
         setUserProfile(null);
+        setOrganisations([]);
+        setActiveOrganisationId("");
+        setOrganisationMembers([]);
         setSessions([]);
         setSelectedSessionId("");
         setCategories([]);
@@ -673,35 +770,14 @@ export default function Home() {
   }, [supabase]);
 
   useEffect(() => {
-    if (user) loadAll("");
+    if (user) loadOrganisationContext();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   useEffect(() => {
-    let mounted = true;
-
-    async function loadUserProfile() {
-      if (!supabase || !user) {
-        setUserProfile(null);
-        return;
-      }
-
-      const { data } = await supabase
-        .from("user_profiles")
-        .select("username,email")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (mounted) {
-        setUserProfile((data as UserProfile | null) ?? null);
-      }
-    }
-
-    loadUserProfile();
-    return () => {
-      mounted = false;
-    };
-  }, [supabase, user]);
+    if (activeOrganisationId) loadAll("", activeOrganisationId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeOrganisationId]);
 
   useEffect(() => {
     if (selectedSessionId) loadEntries(selectedSessionId);
@@ -710,7 +786,7 @@ export default function Home() {
 
   async function createNamedSession(name: string) {
     const sessionName = name.trim();
-    if (!supabase || !user || !sessionName) return;
+    if (!supabase || !user || !activeOrganisationId || !sessionName) return;
 
     const existingSession = sessions.find(
       (session) => session.name.toLowerCase() === sessionName.toLowerCase(),
@@ -723,7 +799,13 @@ export default function Home() {
 
     const { data, error } = await supabase
       .from("stocktake_sessions")
-      .insert({ name: sessionName, status: "open", user_id: user.id })
+      .insert({
+        name: sessionName,
+        status: "open",
+        organisation_id: activeOrganisationId,
+        created_by: user.id,
+        user_id: user.id,
+      })
       .select()
       .single();
     if (error) {
@@ -742,7 +824,7 @@ export default function Home() {
 
   async function saveEntry(event: FormEvent) {
     event.preventDefault();
-    if (!supabase || !user || !selectedSessionId) return;
+    if (!supabase || !user || !activeOrganisationId || !selectedSessionId) return;
     const count = Number(countInput);
     if (!countInput || Number.isNaN(count)) {
       setToast({ tone: "error", text: "Count is required." });
@@ -772,6 +854,8 @@ export default function Home() {
           code: normalisedCode,
           name: newProductName.trim(),
           category_id: newProductCategoryId,
+          organisation_id: activeOrganisationId,
+          created_by: user.id,
           user_id: user.id,
         })
         .select("*, categories(*)")
@@ -790,10 +874,12 @@ export default function Home() {
     }
 
     const { error } = await supabase.from("stocktake_entries").insert({
+      organisation_id: activeOrganisationId,
       session_id: selectedSessionId,
       product_id: productForEntry.id,
       count,
       location: locationInput.trim() || null,
+      entered_by_user_id: user.id,
       user_id: user.id,
     });
     setSaving(false);
@@ -812,7 +898,7 @@ export default function Home() {
   }
 
   async function updateEntry(entryId: string) {
-    if (!supabase || !user) return;
+    if (!supabase || !user || !activeOrganisationId) return;
     const count = Number(editingCount);
     if (!editingCount || Number.isNaN(count) || count < 0) {
       setToast({ tone: "error", text: "Enter a count of 0 or more." });
@@ -822,7 +908,7 @@ export default function Home() {
       .from("stocktake_entries")
       .update({ count })
       .eq("id", entryId)
-      .eq("user_id", user.id);
+      .eq("organisation_id", activeOrganisationId);
     if (error) {
       setToast({ tone: "error", text: "Could not update entry." });
       return;
@@ -834,12 +920,12 @@ export default function Home() {
   }
 
   async function deleteEntry(entryId: string) {
-    if (!supabase || !user || !window.confirm("Delete this count entry?")) return;
+    if (!supabase || !user || !activeOrganisationId || !window.confirm("Delete this count entry?")) return;
     const { error } = await supabase
       .from("stocktake_entries")
       .delete()
       .eq("id", entryId)
-      .eq("user_id", user.id);
+      .eq("organisation_id", activeOrganisationId);
     if (error) {
       setToast({ tone: "error", text: "Could not delete entry." });
       return;
@@ -850,10 +936,15 @@ export default function Home() {
 
   async function addCategory(event: FormEvent) {
     event.preventDefault();
-    if (!supabase || !user || !categoryName.trim()) return;
+    if (!supabase || !user || !activeOrganisationId || !categoryName.trim()) return;
     const { error } = await supabase
       .from("categories")
-      .insert({ name: categoryName.trim(), user_id: user.id });
+      .insert({
+        name: categoryName.trim(),
+        organisation_id: activeOrganisationId,
+        created_by: user.id,
+        user_id: user.id,
+      });
     if (error) {
       setToast({ tone: "error", text: "Could not add category." });
       return;
@@ -865,7 +956,7 @@ export default function Home() {
 
   async function addProduct(event: FormEvent, inline = false) {
     event.preventDefault();
-    if (!supabase || !user) return;
+    if (!supabase || !user || !activeOrganisationId) return;
     const draft = inline
       ? {
           code: normalisedCode,
@@ -885,6 +976,8 @@ export default function Home() {
       code: draft.code,
       name: draft.name.trim(),
       category_id: draft.category_id,
+      organisation_id: activeOrganisationId,
+      created_by: user.id,
       user_id: user.id,
     });
     if (error) {
@@ -899,12 +992,12 @@ export default function Home() {
   }
 
   async function renameCategory(category: Category, name: string) {
-    if (!supabase || !user || !name.trim() || name === category.name) return;
+    if (!supabase || !user || !activeOrganisationId || !name.trim() || name === category.name) return;
     const { error } = await supabase
       .from("categories")
       .update({ name: name.trim() })
       .eq("id", category.id)
-      .eq("user_id", user.id);
+      .eq("organisation_id", activeOrganisationId);
     if (error) {
       setToast({ tone: "error", text: "Could not rename category." });
       return;
@@ -913,12 +1006,12 @@ export default function Home() {
   }
 
   async function updateProduct(product: Product, patch: Partial<Product>) {
-    if (!supabase || !user) return;
+    if (!supabase || !user || !activeOrganisationId) return;
     const { error } = await supabase
       .from("products")
       .update(patch)
       .eq("id", product.id)
-      .eq("user_id", user.id);
+      .eq("organisation_id", activeOrganisationId);
     if (error) {
       setToast({ tone: "error", text: "Could not update product." });
       return;
@@ -957,7 +1050,7 @@ export default function Home() {
   async function importCatalogueTemplate(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
-    if (!file || !supabase || !user) return;
+    if (!file || !supabase || !user || !activeOrganisationId) return;
 
     try {
       const rows = await parseCatalogueImportFile(file);
@@ -972,7 +1065,7 @@ export default function Home() {
       const { data: categoryData, error: categoryLoadError } = await supabase
         .from("categories")
         .select("*")
-        .eq("user_id", user.id);
+        .eq("organisation_id", activeOrganisationId);
       if (categoryLoadError) throw categoryLoadError;
 
       const categoryByName = new Map(
@@ -986,7 +1079,12 @@ export default function Home() {
         if (categoryByName.has(categoryNameFromFile.toLowerCase())) continue;
         const { data, error } = await supabase
           .from("categories")
-          .insert({ name: categoryNameFromFile, user_id: user.id })
+          .insert({
+            name: categoryNameFromFile,
+            organisation_id: activeOrganisationId,
+            created_by: user.id,
+            user_id: user.id,
+          })
           .select()
           .single();
         if (error) throw error;
@@ -997,7 +1095,7 @@ export default function Home() {
       const { data: productData, error: productLoadError } = await supabase
         .from("products")
         .select("*")
-        .eq("user_id", user.id);
+        .eq("organisation_id", activeOrganisationId);
       if (productLoadError) throw productLoadError;
 
       const productByCode = new Map(
@@ -1016,13 +1114,15 @@ export default function Home() {
               category_id: category.id,
             })
             .eq("id", existingProduct.id)
-            .eq("user_id", user.id);
+            .eq("organisation_id", activeOrganisationId);
           if (error) throw error;
         } else {
           const { error } = await supabase.from("products").insert({
             code: row.code,
             name: row.name,
             category_id: category.id,
+            organisation_id: activeOrganisationId,
+            created_by: user.id,
             user_id: user.id,
           });
           if (error) throw error;
@@ -1040,7 +1140,11 @@ export default function Home() {
   }
 
   async function wipeAllData() {
-    if (!supabase || !user) return;
+    if (!supabase || !user || !activeOrganisationId) return;
+    if (!canManageCatalogue) {
+      setToast({ tone: "error", text: "Only organisation admins can wipe shared data." });
+      return;
+    }
     const warned = window.confirm(
       "Warning: this will permanently delete all stocktake sessions, entries, products, and categories. Continue?",
     );
@@ -1054,7 +1158,7 @@ export default function Home() {
     const entryDelete = await supabase
       .from("stocktake_entries")
       .delete()
-      .eq("user_id", user.id);
+      .eq("organisation_id", activeOrganisationId);
     if (entryDelete.error) {
       setToast({ tone: "error", text: "Could not delete stocktake entries." });
       return;
@@ -1062,7 +1166,7 @@ export default function Home() {
     const sessionDelete = await supabase
       .from("stocktake_sessions")
       .delete()
-      .eq("user_id", user.id);
+      .eq("organisation_id", activeOrganisationId);
     if (sessionDelete.error) {
       setToast({ tone: "error", text: "Could not delete stocktake sessions." });
       return;
@@ -1070,7 +1174,7 @@ export default function Home() {
     const productDelete = await supabase
       .from("products")
       .delete()
-      .eq("user_id", user.id);
+      .eq("organisation_id", activeOrganisationId);
     if (productDelete.error) {
       setToast({ tone: "error", text: "Could not delete products." });
       return;
@@ -1078,7 +1182,7 @@ export default function Home() {
     const categoryDelete = await supabase
       .from("categories")
       .delete()
-      .eq("user_id", user.id);
+      .eq("organisation_id", activeOrganisationId);
     if (categoryDelete.error) {
       setToast({ tone: "error", text: "Could not delete categories." });
       return;
@@ -1090,12 +1194,64 @@ export default function Home() {
     await loadAll("");
   }
 
+  async function addOrganisationMember(event: FormEvent) {
+    event.preventDefault();
+    if (!supabase || !user || !activeOrganisationId || !canManageMembers) return;
+    const email = memberEmail.trim().toLowerCase();
+    if (!email.includes("@")) {
+      setToast({ tone: "error", text: "Enter a valid member email address." });
+      return;
+    }
+
+    const { data: profile } = await supabase
+      .from("user_profiles")
+      .select("id,email")
+      .eq("email", email)
+      .maybeSingle();
+
+    const { error } = await supabase.from("organisation_members").insert({
+      organisation_id: activeOrganisationId,
+      user_id: profile?.id ?? null,
+      invited_email: email,
+      role: memberRole,
+      status: profile?.id ? "active" : "pending",
+    });
+
+    if (error) {
+      setToast({ tone: "error", text: "Could not add member. They may already be listed." });
+      return;
+    }
+
+    setMemberEmail("");
+    setMemberRole("warehouse_staff");
+    setToast({
+      tone: "ok",
+      text: profile?.id
+        ? "Member added to this organisation."
+        : "Member invitation prepared. They will join this organisation after sign-up.",
+    });
+    await loadOrganisationContext();
+  }
+
+  async function recordExport(exportType: string) {
+    if (!supabase || !user || !activeOrganisationId) return;
+    await supabase.from("erp_exports").insert({
+      organisation_id: activeOrganisationId,
+      session_id: selectedSessionId || null,
+      generated_by_user_id: user.id,
+      export_type: exportType,
+    });
+  }
+
   const statusText = supabaseConfigured
     ? user
-      ? `${entries.length} saved ${entries.length === 1 ? "entry" : "entries"}`
+      ? activeOrganisation
+        ? `${entries.length} saved ${entries.length === 1 ? "entry" : "entries"}`
+        : "No organisation access"
       : "Sign in required"
     : "Supabase env required";
   const displayUsername =
+    userProfile?.display_name ||
     userProfile?.username ||
     normaliseUsername(String(user?.user_metadata?.username ?? "")) ||
     (user ? `user_${user.id.slice(0, 8)}` : "");
@@ -1164,6 +1320,30 @@ export default function Home() {
               </div>
             </div>
             <div className="hidden flex-wrap items-center gap-2 lg:flex">
+              {user && organisations.length > 1 && (
+                <select
+                  aria-label="Select organisation"
+                  className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+                  onChange={(event) => setActiveOrganisationId(event.target.value)}
+                  value={activeOrganisationId}
+                >
+                  {organisations.map((organisation) => (
+                    <option key={organisation.id} value={organisation.id}>
+                      {organisation.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {user && activeOrganisation && organisations.length <= 1 && (
+                <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
+                  {activeOrganisation.name}
+                </span>
+              )}
+              {user && activeRole && (
+                <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold capitalize text-stone-700">
+                  {activeRole.replace("_", " ")}
+                </span>
+              )}
               {user && (
                 <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
                   {displayUsername}
@@ -1221,6 +1401,16 @@ export default function Home() {
           onSubmit={handleAuth}
           onUsername={setAuthUsername}
         />
+      ) : loading ? (
+        <Skeleton label="Loading organisation data" />
+      ) : !activeOrganisation ? (
+        <section className="rounded border border-amber-300 bg-amber-50 p-4 text-amber-950">
+          <h2 className="text-xl font-black">No organisation access</h2>
+          <p className="mt-2 text-sm font-semibold">
+            Your account is signed in, but it is not linked to an active organisation.
+            Ask an organisation admin to add your email, then sign out and sign in again.
+          </p>
+        </section>
       ) : (
       <section className="grid gap-4 2xl:grid-cols-[300px_1fr]">
         <aside className="hidden space-y-4 lg:block">
@@ -1269,6 +1459,53 @@ export default function Home() {
                   <span className="text-xs uppercase text-stone-500">{session.status}</span>
                 </button>
               ))}
+            </div>
+          </div>
+          <div className="rounded border border-stone-300 bg-white p-3">
+            <h2 className="text-sm font-black uppercase text-stone-800">Organisation</h2>
+            <p className="mt-2 font-black text-stone-950">{activeOrganisation.name}</p>
+            <p className="text-xs font-semibold capitalize text-stone-500">
+              Your role: {activeRole?.replace("_", " ") ?? "member"}
+            </p>
+            {canManageMembers && (
+              <form className="mt-3 grid gap-2" onSubmit={addOrganisationMember}>
+                <input
+                  className="rounded border border-stone-300 px-3 py-2 text-sm"
+                  placeholder="member@email.com"
+                  type="email"
+                  value={memberEmail}
+                  onChange={(event) => setMemberEmail(event.target.value)}
+                />
+                <select
+                  className="rounded border border-stone-300 px-3 py-2 text-sm"
+                  value={memberRole}
+                  onChange={(event) => setMemberRole(event.target.value as OrganisationRole)}
+                >
+                  <option value="warehouse_staff">Warehouse staff</option>
+                  <option value="supervisor">Supervisor</option>
+                  <option value="admin">Admin</option>
+                </select>
+                <button className="rounded bg-emerald-800 px-3 py-2 text-sm font-bold text-white">
+                  Add Member
+                </button>
+              </form>
+            )}
+            <div className="mt-3 space-y-2">
+              {organisationMembers
+                .filter((member) => member.organisation_id === activeOrganisationId)
+                .map((member) => (
+                  <div
+                    className="rounded border border-stone-200 bg-stone-50 px-3 py-2 text-xs"
+                    key={member.id}
+                  >
+                    <p className="font-bold text-stone-900">
+                      {member.invited_email || member.user_id || "Member"}
+                    </p>
+                    <p className="capitalize text-stone-500">
+                      {member.role.replace("_", " ")} · {member.status}
+                    </p>
+                  </div>
+                ))}
             </div>
           </div>
         </aside>
@@ -1427,12 +1664,14 @@ export default function Home() {
               generatedAt={reportGeneratedAt}
               session={selectedSession}
               groups={reportGroups}
+              onExport={recordExport}
             />
           )}
 
           {mode === "catalogue" && (
             <Catalogue
               catalogueDraft={catalogueDraft}
+              canManageCatalogue={canManageCatalogue}
               categories={categories}
               categoryName={categoryName}
               products={products}
@@ -1916,10 +2155,12 @@ function EntryList({
 function Report({
   generatedAt,
   groups,
+  onExport,
   session,
 }: {
   generatedAt: Date;
   groups: [string, { total: number; rows: Entry[] }][];
+  onExport: (exportType: string) => void;
   session?: Session;
 }) {
   const sessionName = session?.name ?? "Stocktake Report";
@@ -1940,6 +2181,7 @@ function Report({
   );
 
   function exportCsv() {
+    onExport("csv");
     const rows = [
       ["Session", sessionName],
       ["Generated", generatedStamp],
@@ -1965,6 +2207,7 @@ function Report({
   }
 
   function exportExcel() {
+    onExport("excel");
     const bodyRows = rowData
       .map(
         (row) => `
@@ -2075,6 +2318,7 @@ function Report({
   }
 
   function openPrintableReport(mode: "print" | "pdf") {
+    onExport(mode);
     const printWindow = window.open("", "_blank", "width=900,height=700");
     if (!printWindow) {
       window.print();
@@ -2171,6 +2415,7 @@ function Report({
 
 function Catalogue({
   catalogueDraft,
+  canManageCatalogue,
   categories,
   categoryName,
   importInputRef,
@@ -2187,6 +2432,7 @@ function Catalogue({
   onWipeAllData,
 }: {
   catalogueDraft: { code: string; name: string; category_id: string };
+  canManageCatalogue: boolean;
   categories: Category[];
   categoryName: string;
   importInputRef: RefObject<HTMLInputElement | null>;
@@ -2215,6 +2461,11 @@ function Catalogue({
             <p className="mt-1 text-sm text-stone-600">
               Import columns: Product Code, Product Name, Category.
             </p>
+            {!canManageCatalogue && (
+              <p className="mt-1 text-xs font-semibold text-amber-800">
+                View only. Ask an organisation admin to manage catalogue data.
+              </p>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -2226,6 +2477,7 @@ function Catalogue({
             </button>
             <button
               className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-black"
+              disabled={!canManageCatalogue}
               onClick={onImportClick}
               type="button"
             >
@@ -2233,6 +2485,7 @@ function Catalogue({
             </button>
             <button
               className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm font-black text-red-800"
+              disabled={!canManageCatalogue}
               onClick={onWipeAllData}
               type="button"
             >
@@ -2250,18 +2503,21 @@ function Catalogue({
         <form className="mt-4 grid gap-2 md:grid-cols-[140px_1fr_190px_auto]" onSubmit={onAddProduct}>
           <input
             className="rounded border border-stone-300 px-3 py-2 uppercase"
+            disabled={!canManageCatalogue}
             placeholder="Code"
             value={catalogueDraft.code}
             onChange={(event) => onDraft({ ...catalogueDraft, code: event.target.value })}
           />
           <input
             className="rounded border border-stone-300 px-3 py-2"
+            disabled={!canManageCatalogue}
             placeholder="Product name"
             value={catalogueDraft.name}
             onChange={(event) => onDraft({ ...catalogueDraft, name: event.target.value })}
           />
           <select
             className="rounded border border-stone-300 px-3 py-2"
+            disabled={!canManageCatalogue}
             value={catalogueDraft.category_id}
             onChange={(event) => onDraft({ ...catalogueDraft, category_id: event.target.value })}
           >
@@ -2272,7 +2528,10 @@ function Catalogue({
               </option>
             ))}
           </select>
-          <button className="rounded bg-emerald-800 px-3 py-2 font-black text-white">
+          <button
+            className="rounded bg-emerald-800 px-3 py-2 font-black text-white disabled:bg-stone-400"
+            disabled={!canManageCatalogue}
+          >
             Add
           </button>
         </form>
@@ -2282,6 +2541,7 @@ function Catalogue({
               <input
                 className="rounded border border-stone-300 px-2 py-2 font-bold uppercase"
                 defaultValue={product.code}
+                disabled={!canManageCatalogue}
                 onBlur={(event) =>
                   onUpdateProduct(product, { code: normaliseProductCode(event.target.value) })
                 }
@@ -2289,11 +2549,13 @@ function Catalogue({
               <input
                 className="rounded border border-stone-300 px-2 py-2"
                 defaultValue={product.name}
+                disabled={!canManageCatalogue}
                 onBlur={(event) => onUpdateProduct(product, { name: event.target.value })}
               />
               <select
                 className="rounded border border-stone-300 px-2 py-2"
                 defaultValue={product.category_id ?? ""}
+                disabled={!canManageCatalogue}
                 onChange={(event) =>
                   onUpdateProduct(product, { category_id: event.target.value })
                 }
@@ -2315,11 +2577,15 @@ function Catalogue({
         <form className="mt-4 flex gap-2" onSubmit={onAddCategory}>
           <input
             className="min-w-0 flex-1 rounded border border-stone-300 px-3 py-2"
+            disabled={!canManageCatalogue}
             placeholder="New category"
             value={categoryName}
             onChange={(event) => onCategoryName(event.target.value)}
           />
-          <button className="rounded bg-emerald-800 px-3 py-2 font-black text-white">
+          <button
+            className="rounded bg-emerald-800 px-3 py-2 font-black text-white disabled:bg-stone-400"
+            disabled={!canManageCatalogue}
+          >
             Add
           </button>
         </form>
@@ -2328,6 +2594,7 @@ function Catalogue({
             <input
               className="w-full rounded border border-stone-300 px-3 py-2"
               defaultValue={category.name}
+              disabled={!canManageCatalogue}
               key={category.id}
               onBlur={(event) => onRenameCategory(category, event.target.value)}
             />
