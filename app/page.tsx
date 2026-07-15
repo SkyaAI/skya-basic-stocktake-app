@@ -86,7 +86,7 @@ const SESSION_PRESETS = [
   "End of Day Check",
   "July Audit",
   "Weekly Stocktake",
-  "Warehouse Count",
+  "New Year Eve Audit",
 ];
 
 function normaliseProductCode(raw: string) {
@@ -1218,10 +1218,23 @@ export default function Home() {
         <aside className="space-y-4">
           <div className="rounded border border-stone-300 bg-white p-3">
             <h2 className="text-sm font-black uppercase text-stone-800">Sessions</h2>
-            <form className="mt-3 flex gap-2" onSubmit={createSession}>
+            <form className="mt-3 grid gap-2 md:grid-cols-[180px_1fr_auto]" onSubmit={createSession}>
+              <select
+                aria-label="Session preset"
+                className="rounded border border-stone-300 px-3 py-2"
+                onChange={(event) => setNewSessionName(event.target.value)}
+                value={SESSION_PRESETS.includes(newSessionName) ? newSessionName : ""}
+              >
+                <option value="">Session type</option>
+                {SESSION_PRESETS.map((preset) => (
+                  <option key={preset} value={preset}>
+                    {preset}
+                  </option>
+                ))}
+              </select>
               <input
-                className="min-w-0 flex-1 rounded border border-stone-300 px-3 py-2"
-                placeholder="New session"
+                className="min-w-0 rounded border border-stone-300 px-3 py-2"
+                placeholder="Custom session"
                 value={newSessionName}
                 onChange={(event) => setNewSessionName(event.target.value)}
               />
@@ -1229,23 +1242,6 @@ export default function Home() {
                 Add
               </button>
             </form>
-            <div className="mt-3">
-              <p className="text-xs font-bold uppercase text-stone-500">
-                Quick start
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {SESSION_PRESETS.map((preset) => (
-                  <button
-                    className="rounded border border-stone-300 bg-stone-50 px-2 py-1 text-xs font-bold text-stone-700 hover:border-emerald-700 hover:bg-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
-                    key={preset}
-                    onClick={() => createNamedSession(preset)}
-                    type="button"
-                  >
-                    {preset}
-                  </button>
-                ))}
-              </div>
-            </div>
             <div className="mt-3 space-y-2">
               {loading && <Skeleton label="Loading sessions" />}
               {!loading && sessions.length === 0 && (
