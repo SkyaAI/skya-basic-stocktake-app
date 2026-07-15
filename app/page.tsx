@@ -1397,7 +1397,8 @@ export default function Home() {
           </p>
         </section>
       ) : (
-      <section className="grid gap-4 2xl:grid-cols-[300px_1fr]">
+      <section className={mode === "count" ? "grid gap-4 2xl:grid-cols-[300px_1fr]" : "space-y-4"}>
+        {mode === "count" && (
         <aside className="hidden space-y-4 lg:block">
           <div className="rounded border border-stone-300 bg-white p-3">
             <h2 className="text-sm font-black uppercase text-stone-800">Sessions</h2>
@@ -1447,6 +1448,7 @@ export default function Home() {
             </div>
           </div>
         </aside>
+        )}
 
         <section className="space-y-4">
           {mode === "count" && (
