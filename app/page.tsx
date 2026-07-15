@@ -387,6 +387,7 @@ async function parseCatalogueImportFile(file: File) {
 export default function Home() {
   const supabase = useMemo(() => (supabaseConfigured ? createClient() : null), []);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const productCodeInputRef = useRef<HTMLInputElement | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -807,6 +808,7 @@ export default function Home() {
     setNewProductCategoryId("");
     setToast({ tone: "ok", text: "Entry saved." });
     await loadAll(selectedSessionId);
+    requestAnimationFrame(() => productCodeInputRef.current?.focus());
   }
 
   async function updateEntry(entryId: string) {
@@ -1126,8 +1128,14 @@ export default function Home() {
           />
           <NavigationMenu
             activeMode={mode}
+            displayUsername={displayUsername}
             onClose={() => setMobileNavOpen(false)}
             onSelect={selectNavigationMode}
+            onSignOut={() => {
+              setMobileNavOpen(false);
+              signOut();
+            }}
+            statusText={statusText}
             variant="mobile"
           />
         </div>
@@ -1142,7 +1150,7 @@ export default function Home() {
                   aria-controls="mobile-stocktake-navigation"
                   aria-expanded={mobileNavOpen}
                   aria-label="Open navigation"
-                  className="mt-1 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded border border-stone-300 bg-white text-stone-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2 lg:hidden"
+                  className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded border border-stone-300 bg-white text-stone-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2 lg:hidden"
                   onClick={() => setMobileNavOpen(true)}
                   type="button"
                 >
@@ -1155,7 +1163,7 @@ export default function Home() {
                 </p>
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="hidden flex-wrap items-center gap-2 lg:flex">
               {user && (
                 <span className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
                   {displayUsername}
@@ -1215,7 +1223,7 @@ export default function Home() {
         />
       ) : (
       <section className="grid gap-4 2xl:grid-cols-[300px_1fr]">
-        <aside className="space-y-4">
+        <aside className="hidden space-y-4 lg:block">
           <div className="rounded border border-stone-300 bg-white p-3">
             <h2 className="text-sm font-black uppercase text-stone-800">Sessions</h2>
             <form className="mt-3 grid gap-2 md:grid-cols-[180px_1fr_auto]" onSubmit={createSession}>
@@ -1268,7 +1276,50 @@ export default function Home() {
         <section className="space-y-4">
           {mode === "count" && (
             <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_420px]">
-              <section className="rounded border border-stone-300 bg-white p-4">
+              <section className="rounded border border-stone-300 bg-white p-4 shadow-sm lg:shadow-none">
+                <div className="mb-4 rounded border border-stone-200 bg-stone-50 p-3 lg:hidden">
+                  <label className="text-xs font-bold uppercase text-stone-600" htmlFor="mobile-session">
+                    Current session
+                  </label>
+                  <select
+                    className="mt-1 h-12 w-full rounded border border-stone-300 bg-white px-3 text-base font-bold text-stone-950 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+                    id="mobile-session"
+                    onChange={(event) => setSelectedSessionId(event.target.value)}
+                    value={selectedSessionId}
+                  >
+                    <option value="">Select a session</option>
+                    {sessions.map((session) => (
+                      <option key={session.id} value={session.id}>
+                        {session.name}
+                      </option>
+                    ))}
+                  </select>
+                  <form className="mt-3 grid gap-2" onSubmit={createSession}>
+                    <select
+                      aria-label="Session preset"
+                      className="h-12 rounded border border-stone-300 bg-white px-3 text-base text-stone-900 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+                      onChange={(event) => setNewSessionName(event.target.value)}
+                      value={SESSION_PRESETS.includes(newSessionName) ? newSessionName : ""}
+                    >
+                      <option value="">Session type</option>
+                      {SESSION_PRESETS.map((preset) => (
+                        <option key={preset} value={preset}>
+                          {preset}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      aria-label="Custom session name"
+                      className="h-12 rounded border border-stone-300 px-3 text-base focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+                      placeholder="Custom session"
+                      value={newSessionName}
+                      onChange={(event) => setNewSessionName(event.target.value)}
+                    />
+                    <button className="h-12 rounded bg-emerald-800 px-4 text-base font-black text-white focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2">
+                      Add Session
+                    </button>
+                  </form>
+                </div>
                 <h2 className="text-xl font-black text-stone-950">
                   {selectedSession?.name ?? "Select a session"}
                 </h2>
@@ -1277,13 +1328,15 @@ export default function Home() {
                     Add or select a session before saving a count.
                   </p>
                 )}
-                <form className="mt-4 grid gap-3 xl:grid-cols-[minmax(180px,1fr)_160px_minmax(160px,220px)_auto]" onSubmit={saveEntry}>
+                <form className="mt-4 grid gap-4 xl:grid-cols-[minmax(180px,1fr)_160px_minmax(160px,220px)_auto]" onSubmit={saveEntry}>
                   <div>
-                    <label className="text-xs font-bold uppercase text-stone-600">Product code</label>
+                    <label className="text-sm font-black uppercase text-stone-700" htmlFor="count-product-code">Product code</label>
                     <input
-                      className="mt-1 w-full rounded border border-stone-300 px-3 py-3 text-lg font-bold uppercase"
+                      className="mt-2 h-14 w-full rounded border border-stone-300 px-4 text-xl font-black uppercase text-stone-950 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2 xl:text-lg"
+                      id="count-product-code"
                       inputMode="text"
                       placeholder="WH-0042"
+                      ref={productCodeInputRef}
                       value={codeInput}
                       onChange={(event) => setCodeInput(event.target.value)}
                     />
@@ -1306,9 +1359,10 @@ export default function Home() {
                     )}
                   </div>
                   <div>
-                    <label className="text-xs font-bold uppercase text-stone-600">Count</label>
+                    <label className="text-sm font-black uppercase text-stone-700" htmlFor="count-quantity">Count quantity</label>
                     <input
-                      className="mt-1 w-full rounded border border-stone-300 px-3 py-3 text-lg font-bold"
+                      className="mt-2 h-14 w-full rounded border border-stone-300 px-4 text-xl font-black text-stone-950 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2 xl:text-lg"
+                      id="count-quantity"
                       inputMode="numeric"
                       min={0}
                       type="number"
@@ -1317,19 +1371,26 @@ export default function Home() {
                     />
                   </div>
                   <div>
-                    <label className="text-xs font-bold uppercase text-stone-600">Location</label>
+                    <label className="text-sm font-black uppercase text-stone-700" htmlFor="count-location">Location</label>
                     <input
-                      className="mt-1 w-full rounded border border-stone-300 px-3 py-3 text-lg font-bold"
+                      className="mt-2 h-14 w-full rounded border border-stone-300 px-4 text-lg font-bold text-stone-950 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+                      id="count-location"
                       placeholder="Optional"
                       value={locationInput}
                       onChange={(event) => setLocationInput(event.target.value)}
                     />
                   </div>
                   <button
-                    className="rounded bg-emerald-800 px-5 py-3 font-black text-white xl:self-end"
+                    aria-label="Save entry"
+                    className="h-14 w-full rounded bg-emerald-800 px-5 text-lg font-black text-white shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2 xl:w-auto xl:self-end xl:text-base"
                     disabled={!selectedSessionId || saving}
                   >
-                    {saving ? "Saving" : selectedSessionId ? "Save" : "Select session first"}
+                    {saving ? "Saving" : selectedSessionId ? (
+                      <>
+                        <span className="xl:hidden">Save Entry</span>
+                        <span className="hidden xl:inline">Save</span>
+                      </>
+                    ) : "Select session first"}
                   </button>
                 </form>
 
@@ -1399,13 +1460,19 @@ export default function Home() {
 
 function NavigationMenu({
   activeMode,
+  displayUsername,
   onClose,
   onSelect,
+  onSignOut,
+  statusText,
   variant,
 }: {
   activeMode: NavMode;
+  displayUsername?: string;
   onClose?: () => void;
   onSelect: (mode: NavMode) => void;
+  onSignOut?: () => void;
+  statusText?: string;
   variant: "desktop" | "mobile";
 }) {
   const isMobile = variant === "mobile";
@@ -1473,6 +1540,26 @@ function NavigationMenu({
           );
         })}
       </nav>
+      {isMobile && (
+        <div className="border-t border-stone-300 p-4">
+          <div className="rounded border border-stone-300 bg-white p-3">
+            <p className="text-xs font-bold uppercase text-stone-500">Account</p>
+            <p className="mt-1 text-base font-black text-stone-950">
+              {displayUsername}
+            </p>
+            {statusText && (
+              <p className="mt-1 text-sm font-semibold text-stone-600">{statusText}</p>
+            )}
+          </div>
+          <button
+            className="mt-3 h-12 w-full rounded border border-stone-300 bg-white px-4 text-base font-black text-stone-900 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+            onClick={onSignOut}
+            type="button"
+          >
+            Sign Out
+          </button>
+        </div>
+      )}
     </aside>
   );
 }
@@ -1749,7 +1836,7 @@ function EntryList({
 }) {
   return (
     <section className="rounded border border-stone-300 bg-white p-4">
-      <h2 className="text-lg font-black text-stone-950">Entries</h2>
+      <h2 className="text-lg font-black text-stone-950">Recent entries</h2>
       <div className="mt-3 space-y-2">
         {entries.length === 0 && (
           <p className="rounded border border-stone-200 bg-stone-50 p-3 text-sm text-stone-600">
@@ -1783,34 +1870,35 @@ function EntryList({
                     Saved {formatDateTime(entry.created_at)}
                   </p>
                 </div>
-                <p className="text-2xl font-black text-stone-950">{entry.count}</p>
+                <p className="text-3xl font-black text-stone-950 xl:text-2xl">{entry.count}</p>
               </div>
               {editingEntryId === entry.id ? (
-                <div className="mt-3 flex gap-2">
+                <div className="mt-3 grid gap-2 sm:flex">
                   <input
-                    className="w-28 rounded border border-stone-300 px-3 py-2 font-bold"
+                    aria-label="Edit count quantity"
+                    className="h-12 w-full rounded border border-stone-300 px-3 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2 sm:w-28"
                     min={0}
                     type="number"
                     value={editingCount}
                     onChange={(event) => onEditingCount(event.target.value)}
                   />
                   <button
-                    className="rounded bg-emerald-800 px-3 py-2 font-bold text-white"
+                    className="h-12 rounded bg-emerald-800 px-4 font-bold text-white focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
                     onClick={() => onSaveEdit(entry.id)}
                   >
                     Save
                   </button>
                 </div>
               ) : (
-                <div className="mt-3 flex gap-2">
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:flex">
                   <button
-                    className="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-bold"
+                    className="h-12 rounded border border-stone-300 bg-white px-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
                     onClick={() => onEdit(entry)}
                   >
                     Edit
                   </button>
                   <button
-                    className="rounded border border-red-300 bg-white px-3 py-2 text-sm font-bold text-red-700"
+                    className="h-12 rounded border border-red-300 bg-white px-3 text-sm font-bold text-red-700 focus:outline-none focus:ring-2 focus:ring-red-600 focus:ring-offset-2"
                     onClick={() => onDelete(entry.id)}
                   >
                     Delete
