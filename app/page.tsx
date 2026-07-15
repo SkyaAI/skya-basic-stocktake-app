@@ -433,6 +433,7 @@ export default function Home() {
   const [toast, setToast] = useState<Toast>(null);
   const [mode, setMode] = useState<NavMode>("count");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [mobileSessionEditorOpen, setMobileSessionEditorOpen] = useState(false);
 
   const [newSessionName, setNewSessionName] = useState("");
   const [codeInput, setCodeInput] = useState("");
@@ -791,6 +792,18 @@ export default function Home() {
   }, [selectedSessionId]);
 
   useEffect(() => {
+    if (mode !== "count") return;
+    if (sessions.length === 0 || !selectedSessionId) {
+      setMobileSessionEditorOpen(true);
+    }
+  }, [mode, selectedSessionId, sessions.length]);
+
+  useEffect(() => {
+    if (mode !== "count" || !selectedSessionId) return;
+    requestAnimationFrame(() => productCodeInputRef.current?.focus());
+  }, [mode, selectedSessionId]);
+
+  useEffect(() => {
     if (mode === "organisation" && !canManageMembers) {
       setMode("count");
     }
@@ -805,6 +818,7 @@ export default function Home() {
     );
     if (existingSession) {
       setSelectedSessionId(existingSession.id);
+      setMobileSessionEditorOpen(false);
       setToast({ tone: "ok", text: `${existingSession.name} selected.` });
       return;
     }
@@ -825,6 +839,7 @@ export default function Home() {
       return;
     }
     setNewSessionName("");
+    setMobileSessionEditorOpen(false);
     setToast({ tone: "ok", text: "Session created." });
     await loadAll((data as Session).id);
   }
@@ -901,7 +916,6 @@ export default function Home() {
     }
     setCodeInput("");
     setCountInput("");
-    setLocationInput("");
     setNewProductName("");
     setNewProductCategoryId("");
     setToast({ tone: "ok", text: "Entry saved." });
@@ -1349,6 +1363,10 @@ export default function Home() {
             </div>
           </header>
 
+          {user && activeOrganisation && (
+            <MobileSectionTabs activeMode={mode} onSelect={selectNavigationMode} />
+          )}
+
       {!supabaseConfigured && (
         <div className="rounded border border-red-300 bg-red-50 p-4 text-sm text-red-900">
           Pull Vercel env vars into <strong>.env.local</strong> to connect the live
@@ -1454,48 +1472,58 @@ export default function Home() {
           {mode === "count" && (
             <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_420px]">
               <section className="rounded border border-stone-300 bg-white p-4 shadow-sm lg:shadow-none">
-                <div className="mb-4 rounded border border-stone-200 bg-stone-50 p-3 lg:hidden">
-                  <label className="text-xs font-bold uppercase text-stone-600" htmlFor="mobile-session">
-                    Current session
-                  </label>
-                  <select
-                    className="mt-1 h-12 w-full rounded border border-stone-300 bg-white px-3 text-base font-bold text-stone-950 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
-                    id="mobile-session"
-                    onChange={(event) => setSelectedSessionId(event.target.value)}
-                    value={selectedSessionId}
-                  >
-                    <option value="">Select a session</option>
-                    {sessions.map((session) => (
-                      <option key={session.id} value={session.id}>
-                        {session.name}
-                      </option>
-                    ))}
-                  </select>
-                  <form className="mt-3 grid gap-2" onSubmit={createSession}>
-                    <select
-                      aria-label="Session preset"
-                      className="h-12 rounded border border-stone-300 bg-white px-3 text-base text-stone-900 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
-                      onChange={(event) => setNewSessionName(event.target.value)}
-                      value={SESSION_PRESETS.includes(newSessionName) ? newSessionName : ""}
+                <div className="mb-4 rounded border border-emerald-200 bg-emerald-50 p-3 lg:hidden">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-black uppercase text-emerald-900">
+                        Active session
+                      </p>
+                      <p className="mt-1 truncate text-lg font-black text-stone-950">
+                        {selectedSession?.name ?? "No session selected"}
+                      </p>
+                    </div>
+                    <button
+                      aria-expanded={mobileSessionEditorOpen}
+                      aria-label="Change active session"
+                      className="h-12 shrink-0 rounded border border-emerald-800 bg-white px-4 text-sm font-black text-emerald-950 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+                      onClick={() => setMobileSessionEditorOpen((open) => !open)}
+                      type="button"
                     >
-                      <option value="">Session type</option>
-                      {SESSION_PRESETS.map((preset) => (
-                        <option key={preset} value={preset}>
-                          {preset}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      aria-label="Custom session name"
-                      className="h-12 rounded border border-stone-300 px-3 text-base focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
-                      placeholder="Custom session"
-                      value={newSessionName}
-                      onChange={(event) => setNewSessionName(event.target.value)}
-                    />
-                    <button className="h-12 rounded bg-emerald-800 px-4 text-base font-black text-white focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2">
-                      Add Session
+                      {mobileSessionEditorOpen ? "Done" : "Change"}
                     </button>
-                  </form>
+                  </div>
+                  {mobileSessionEditorOpen && (
+                    <div className="mt-3 grid gap-3 border-t border-emerald-200 pt-3">
+                      <form className="grid gap-2" onSubmit={createSession}>
+                        <p className="text-xs font-bold uppercase text-stone-600">
+                          Create new
+                        </p>
+                        <select
+                          aria-label="Session preset"
+                          className="h-12 rounded border border-stone-300 bg-white px-3 text-base text-stone-900 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+                          onChange={(event) => setNewSessionName(event.target.value)}
+                          value={SESSION_PRESETS.includes(newSessionName) ? newSessionName : ""}
+                        >
+                          <option value="">Session type</option>
+                          {SESSION_PRESETS.map((preset) => (
+                            <option key={preset} value={preset}>
+                              {preset}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          aria-label="Custom session name"
+                          className="h-12 rounded border border-stone-300 px-3 text-base focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+                          placeholder="Custom session"
+                          value={newSessionName}
+                          onChange={(event) => setNewSessionName(event.target.value)}
+                        />
+                        <button className="h-12 rounded bg-emerald-800 px-4 text-base font-black text-white focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2">
+                          Add Session
+                        </button>
+                      </form>
+                    </div>
+                  )}
                 </div>
                 <h2 className="text-xl font-black text-stone-950">
                   {selectedSession?.name ?? "Select a session"}
@@ -1674,9 +1702,10 @@ function NavigationMenu({
   variant: "desktop" | "mobile";
 }) {
   const isMobile = variant === "mobile";
-  const visibleItems = NAV_ITEMS.filter(
-    (item) => item.id !== "organisation" || (!isMobile && canManageOrganisation),
-  );
+  const visibleItems = NAV_ITEMS.filter((item) => {
+    if (isMobile) return item.id === "organisation" && canManageOrganisation;
+    return item.id !== "organisation" || canManageOrganisation;
+  });
 
   return (
     <aside
@@ -1706,6 +1735,11 @@ function NavigationMenu({
         )}
       </div>
       <nav aria-label="Stocktake sections" className="flex-1 space-y-2 p-4">
+        {isMobile && visibleItems.length === 0 && (
+          <p className="rounded border border-stone-200 bg-white p-3 text-sm font-semibold text-stone-600">
+            Count, Report, and Catalogue are available from the main mobile tabs.
+          </p>
+        )}
         {visibleItems.map((item) => {
           const Icon = item.icon;
           const active = activeMode === item.id;
@@ -1762,6 +1796,42 @@ function NavigationMenu({
         </div>
       )}
     </aside>
+  );
+}
+
+function MobileSectionTabs({
+  activeMode,
+  onSelect,
+}: {
+  activeMode: NavMode;
+  onSelect: (mode: NavMode) => void;
+}) {
+  const items = NAV_ITEMS.filter((item) => item.id !== "organisation");
+
+  return (
+    <nav aria-label="Primary stocktake sections" className="grid grid-cols-3 gap-2 lg:hidden">
+      {items.map((item) => {
+        const Icon = item.icon;
+        const active = activeMode === item.id;
+
+        return (
+          <button
+            aria-current={active ? "page" : undefined}
+            className={`min-h-14 rounded border px-2 py-2 text-center focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2 ${
+              active
+                ? "border-emerald-800 bg-emerald-800 text-white"
+                : "border-stone-300 bg-white text-stone-800"
+            }`}
+            key={item.id}
+            onClick={() => onSelect(item.id)}
+            type="button"
+          >
+            <Icon className="mx-auto h-5 w-5" />
+            <span className="mt-1 block text-xs font-black">{item.label}</span>
+          </button>
+        );
+      })}
+    </nav>
   );
 }
 
@@ -2479,7 +2549,7 @@ function Report({
             <div className="divide-y divide-stone-200">
               {group.rows.map((entry) => (
                 <div
-                  className="grid grid-cols-[90px_1fr_100px_70px] gap-2 px-3 py-2 text-sm"
+                  className="grid gap-1 px-3 py-3 text-sm sm:grid-cols-[90px_1fr_100px_70px] sm:gap-2 sm:py-2"
                   key={entry.id}
                 >
                   <span className="font-black">{entry.products?.code}</span>
@@ -2490,9 +2560,13 @@ function Report({
                     </span>
                   </span>
                   <span className="font-semibold text-stone-600">
+                    <span className="sm:hidden">Location: </span>
                     {entry.location || "Not set"}
                   </span>
-                  <span className="text-right font-black">{entry.count}</span>
+                  <span className="font-black sm:text-right">
+                    <span className="sm:hidden">Count: </span>
+                    {entry.count}
+                  </span>
                 </div>
               ))}
             </div>
